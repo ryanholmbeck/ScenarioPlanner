@@ -577,6 +577,21 @@
           <input type="number" id="param-batch-size" value="" min="0" step="1" placeholder="From registry"
             oninput="runScenario()">
         </div>
+        <div>
+          <label style="display:flex;justify-content:space-between;align-items:center">
+            <span>Starting BI (override)</span>
+            <a href="javascript:void(0)" id="param-bi-reset"
+               style="font-size:10px;color:var(--muted);text-decoration:underline;display:none"
+               onclick="(function(){var p=document.getElementById('sel-product').value; clearBIOverride(p); var i=document.getElementById('param-bi-override'); i.value=''; document.getElementById('param-bi-reset').style.display='none'; runScenario();})()">
+              reset
+            </a>
+          </label>
+          <input type="number" id="param-bi-override" value="" min="0" step="1" placeholder="From workbook"
+            oninput="(function(v){var p=document.getElementById('sel-product').value; setBIOverride(p, v===''?null:parseFloat(v)); document.getElementById('param-bi-reset').style.display=(v===''?'none':'inline'); runScenario();})(this.value)">
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">
+            Seeds the scenario simulation; base series unchanged.
+          </div>
+        </div>
         <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;">
             <input type="checkbox" id="suppress-post-binding" onchange="runScenario()" style="accent-color:var(--gold);">
@@ -1687,10 +1702,16 @@ function getBaseRows(product) {
 
 // SCENARIO rows — baseline merged with any uploaded customStreams
 function getScenarioRows(product) {
-  const rows = _buildRows(product, getMergedStreams());
+  let rows = _buildRows(product, getMergedStreams());
   // For DP products: offset demand by lead time
-  if (product === '200mg DP') return applyDPLeadTimeOffset(rows, '188mg LP');
-  if (product === '50mg DP')  return applyDPLeadTimeOffset(rows, '47mg LP');
+  if (product === '200mg DP') rows = applyDPLeadTimeOffset(rows, '188mg LP');
+  else if (product === '50mg DP') rows = applyDPLeadTimeOffset(rows, '47mg LP');
+  // Apply starting-BI override (first row only — chain propagates from there)
+  const biOv = getBIOverride(product);
+  if (biOv !== null && rows.length) {
+    rows = rows.slice();
+    rows[0] = Object.assign({}, rows[0], { bi: biOv });
+  }
   return rows;
 }
 
@@ -1703,6 +1724,32 @@ function getMeta(product) {
 //  prodOverrides[product][month_iso] = scenBatches (number, can be 0 to cancel)
 // ══════════════════════════════════════════════════════════════════════════════
 let prodOverrides = {};  // { "200mg DP": { "2026-06-01": 0, "2026-09-01": 1 }, ... }
+
+// ── STARTING BI OVERRIDES ────────────────────────────────────────────────────
+// Per-product override applied to the first-month BI of the scenario series.
+// Base series stays as workbook truth so the user can see the delta. Persisted
+// to localStorage so refreshes don't blow away active what-ifs.
+let biOverrides = {};
+try {
+  biOverrides = JSON.parse(localStorage.getItem('geron_bi_overrides') || '{}');
+} catch (e) { biOverrides = {}; }
+
+function getBIOverride(product) {
+  return Object.prototype.hasOwnProperty.call(biOverrides, product)
+    ? biOverrides[product] : null;
+}
+function setBIOverride(product, value) {
+  if (value === null || value === undefined || value === '' || !isFinite(value)) {
+    delete biOverrides[product];
+  } else {
+    biOverrides[product] = Number(value);
+  }
+  try { localStorage.setItem('geron_bi_overrides', JSON.stringify(biOverrides)); } catch (e) {}
+}
+function clearBIOverride(product) {
+  delete biOverrides[product];
+  try { localStorage.setItem('geron_bi_overrides', JSON.stringify(biOverrides)); } catch (e) {}
+}
 
 function getProdOverride(product, month) {
   return (prodOverrides[product] && prodOverrides[product][month] !== undefined)
@@ -3739,6 +3786,21 @@ function onProductChange() {
   const omohEl = document.getElementById('param-overstock-moh');if (omohEl) omohEl.value = meta.overstock_moh|| 18;
   const ltEl   = document.getElementById('param-lead-time');    if (ltEl)   ltEl.value   = meta.lead_time    || 3;
   const bsEl = document.getElementById('param-batch-size'); if (bsEl) bsEl.value = meta.batch_size || '';
+
+  // Starting-BI override field: show current override or workbook default as placeholder
+  const biEl = document.getElementById('param-bi-override');
+  const biResetEl = document.getElementById('param-bi-reset');
+  if (biEl) {
+    const ov  = getBIOverride(product);
+    let def = '';
+    try {
+      const baseRows = getBaseRows(product);
+      if (baseRows && baseRows.length && baseRows[0].bi != null) def = baseRows[0].bi;
+    } catch (e) {}
+    biEl.value       = (ov === null || ov === undefined) ? '' : ov;
+    biEl.placeholder = def === '' ? 'From workbook' : `Workbook: ${Math.round(def).toLocaleString()}`;
+    if (biResetEl) biResetEl.style.display = (ov === null || ov === undefined) ? 'none' : 'inline';
+  }
 
   // ── Sync the Combined Pool tab's pair selector to match main spotlight ─
   // If the spotlight is part of a known LP+DP pair, switch the cpool-pair
