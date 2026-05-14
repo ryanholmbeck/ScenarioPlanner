@@ -4145,9 +4145,12 @@ function renderExpiryGantt(product, lots, opts) {
     const consumeVisual = (cStart < today) ? today : cStart;
     // DOM gate: a lot can't be sold before it's manufactured. If FEFO demand
     // wants it before DOM, the blue bar begins at DOM and a yellow gap bar
-    // marks the unmet-supply window (consumeVisual → DOM).
+    // marks the unmet-supply window (consumeVisual → DOM). We match the
+    // table's gap criterion (dom > consumeStart) so the two views agree.
     const dom        = l.dom || null;
-    const hasGap     = dom && dom > consumeVisual && dom <= (runout || dom);
+    const cStartRaw  = l.consumeStart || today;
+    const hasGap     = !!(dom && dom > cStartRaw);
+    const gapFrom    = hasGap ? (cStartRaw < today ? today : cStartRaw) : consumeVisual;
     const visualStart = hasGap ? dom : consumeVisual;
     const dynRisk     = new Date(runout) > new Date(riskCutoff);
 
@@ -4193,8 +4196,8 @@ function renderExpiryGantt(product, lots, opts) {
           <span style="font-family:monospace;">${l.lot}</span>${statusBadge}
         </div>
         <div style="flex:1;position:relative;height:14px;">
-          ${hasGap ? `<div title="Production gap: FEFO demand wants this lot starting ${consumeVisual.slice(0,7)} but DOM is ${dom.slice(0,7)} — ${Math.round((new Date(dom) - new Date(consumeVisual)) / (1000*60*60*24*30.44))} mo of unmet supply.&#10;Fill from another lot or pull production forward."
-               style="position:absolute;left:${pct(consumeVisual)}%;width:${Math.max(0.3, pct(dom) - pct(consumeVisual))}%;height:100%;background:repeating-linear-gradient(45deg,#facc15,#facc15 4px,#fde68a 4px,#fde68a 8px);border:1px solid #ca8a04;border-radius:2px;opacity:0.95;z-index:1;"></div>` : ''}
+          ${hasGap ? `<div title="Production gap: FEFO demand wants this lot starting ${gapFrom.slice(0,7)} but DOM is ${dom.slice(0,7)} — ${Math.round((new Date(dom) - new Date(gapFrom)) / (1000*60*60*24*30.44))} mo of unmet supply.&#10;Fill from another lot or pull production forward."
+               style="position:absolute;left:${pct(gapFrom)}%;width:${Math.max(0.3, pct(dom) - pct(gapFrom))}%;height:100%;background:repeating-linear-gradient(45deg,#facc15,#facc15 4px,#fde68a 4px,#fde68a 8px);border:1px solid #ca8a04;border-radius:2px;opacity:0.95;z-index:1;"></div>` : ''}
           <div title="${barTooltip}"
                style="position:absolute;left:${blueLeft}%;width:${blueW}%;height:100%;background:${blueColor};border-radius:2px;opacity:${blueOpacity};z-index:2${blueExtra};"></div>
           ${dynRisk && pinkW>0 ? `<div title="Scrap-risk window ${riskCutoff.slice(0,7)} → ${runout.slice(0,7)} · ${fmt(riskQty,0)} units"
