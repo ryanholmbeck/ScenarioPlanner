@@ -4154,20 +4154,16 @@ function renderExpiryGantt(product, lots, opts) {
 
     const statusBadge = `<span style="font-size:8px;font-weight:700;background:${l.isOnHold?'#f59e0b':(dynRisk?'#dc2626':'#15803d')};color:#fff;border-radius:2px;padding:0 4px;margin-left:4px;">${l.lotStatus}</span>`;
 
-    // Inline qty labels inside wide bars; floating label to the right for narrow ones.
+    // Always show qty labels to the right of the bar — consistent regardless
+    // of bar width. Format: "X consumed · Y at scrap risk" (risk part shown
+    // only when dynRisk).
     const safeLabel = l.isOnHold ? 'On Hold' : `${fmt(safeQty,0)} consumed`;
     const riskLabel = `${fmt(riskQty,0)} at scrap risk`;
-    const showInlineSafe = blueW >= 6 && !l.isOnHold;
-    const showInlineRisk = pinkW >= 6 && dynRisk;
-    const safeInline = showInlineSafe
-      ? `<div style="position:absolute;left:${blueLeft}%;width:${blueW}%;top:0;height:100%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#fff;z-index:6;pointer-events:none;white-space:nowrap;overflow:hidden;">${safeLabel}</div>`
-      : '';
-    const riskInline = showInlineRisk
-      ? `<div style="position:absolute;left:${pinkLeft}%;width:${pinkW}%;top:0;height:100%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#7f1d4d;z-index:6;pointer-events:none;white-space:nowrap;overflow:hidden;">${riskLabel}</div>`
-      : '';
-    const externalLabel = (!showInlineSafe && !showInlineRisk && !l.isOnHold)
-      ? `<div style="position:absolute;left:${Math.min(99, blueRight + (dynRisk ? pinkW : 0) + 0.5)}%;top:-1px;font-size:9px;color:var(--navy);font-weight:600;z-index:6;pointer-events:none;white-space:nowrap;">${dynRisk ? `${safeLabel} · ${riskLabel}` : safeLabel}</div>`
-      : '';
+    const labelText = l.isOnHold
+      ? safeLabel
+      : (dynRisk ? `${safeLabel} · ${riskLabel}` : safeLabel);
+    const labelLeft = Math.min(99, (dynRisk ? pinkRight : blueRight) + 0.5);
+    const externalLabel = `<div style="position:absolute;left:${labelLeft}%;top:-1px;font-size:9px;color:var(--navy);font-weight:600;z-index:6;pointer-events:none;white-space:nowrap;">${labelText}</div>`;
 
     const barTooltip = l.isOnHold
       ? `On Hold — not consumed; see Release By in the table`
@@ -4183,7 +4179,7 @@ function renderExpiryGantt(product, lots, opts) {
                style="position:absolute;left:${blueLeft}%;width:${blueW}%;height:100%;background:${blueColor};border-radius:2px;opacity:${blueOpacity};z-index:2${blueExtra};"></div>
           ${dynRisk && pinkW>0 ? `<div title="Scrap-risk window ${riskCutoff.slice(0,7)} → ${runout.slice(0,7)} · ${fmt(riskQty,0)} units"
                style="position:absolute;left:${pinkLeft}%;width:${pinkW}%;height:100%;background:#f9a8d4;border-radius:0 2px 2px 0;opacity:0.85;z-index:3;"></div>` : ''}
-          ${safeInline}${riskInline}${externalLabel}
+          ${externalLabel}
           ${dynRisk ? `<div style="position:absolute;left:${cutoffX}%;top:-4px;width:2px;height:22px;background:#dc2626;transform:translateX(-50%);z-index:4;"></div>` : ''}
           <div style="position:absolute;left:${expX}%;top:-4px;width:2px;height:22px;background:#1a2b5e;transform:translateX(-50%);z-index:4;"></div>
           <div style="position:absolute;left:${expX}%;top:-14px;transform:translateX(-50%);font-size:8px;font-weight:700;color:#1a2b5e;z-index:5;">exp</div>
