@@ -26,15 +26,54 @@ except ImportError:
     import openpyxl
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  PATHS — Edit these if you move the files
+#  PATHS
+#
+#  Resolution order (first hit wins):
+#    1. Environment variables (GERON_WORKBOOK, GERON_DASHBOARD, GERON_PLANNER)
+#    2. Files in the same folder as this script (relocatable / intranet-friendly)
+#    3. The original OneDrive paths below (legacy default)
+#
+#  Set GERON_PLANNER=NONE to skip the Scenario Planner update.
 # ══════════════════════════════════════════════════════════════════════════════
 
-WORKBOOK_PATH = r"C:\Users\rholmbeck\OneDrive - Geron Corporation\Documents\Current Files\Demand_Inventory_Supply Planning_Expiry_Workbook.xlsm"
-HTML_IN       = Path(r"C:\Users\rholmbeck\OneDrive - Geron Corporation\Documents\Current Files\Geron_SOP_Executive_Dashboard.html")
-HTML_OUT      = HTML_IN  # overwrite in place
+_SCRIPT_DIR = Path(__file__).resolve().parent
 
-# Scenario Planner — set to None to skip, or point to the file path
-SCENARIO_PLANNER_PATH = Path(r"C:\Users\rholmbeck\OneDrive - Geron Corporation\Documents\Current Files\Geron_SOP_Scenario_Planner.html")
+_DEFAULT_WORKBOOK = r"C:\Users\rholmbeck\OneDrive - Geron Corporation\Documents\Current Files\Demand_Inventory_Supply Planning_Expiry_Workbook.xlsm"
+_DEFAULT_HTML     = r"C:\Users\rholmbeck\OneDrive - Geron Corporation\Documents\Current Files\Geron_SOP_Executive_Dashboard.html"
+_DEFAULT_PLANNER  = r"C:\Users\rholmbeck\OneDrive - Geron Corporation\Documents\Current Files\Geron_SOP_Scenario_Planner.html"
+
+
+def _resolve_path(env_var, local_name, legacy):
+    env_val = os.environ.get(env_var)
+    if env_val:
+        return Path(env_val)
+    local = _SCRIPT_DIR / local_name
+    if local.exists():
+        return local
+    return Path(legacy)
+
+
+WORKBOOK_PATH = _resolve_path(
+    "GERON_WORKBOOK",
+    "Demand_Inventory_Supply Planning_Expiry_Workbook.xlsm",
+    _DEFAULT_WORKBOOK,
+)
+HTML_IN  = _resolve_path(
+    "GERON_DASHBOARD",
+    "Geron_SOP_Executive_Dashboard.html",
+    _DEFAULT_HTML,
+)
+HTML_OUT = HTML_IN  # overwrite in place
+
+_planner_env = os.environ.get("GERON_PLANNER", "").strip().upper()
+if _planner_env == "NONE":
+    SCENARIO_PLANNER_PATH = None
+else:
+    SCENARIO_PLANNER_PATH = _resolve_path(
+        "GERON_PLANNER",
+        "Geron_SOP_Scenario_Planner.html",
+        _DEFAULT_PLANNER,
+    )
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  WORKBOOK STRUCTURE MAP  (Enhanced workbook — verified Mar 2026)
@@ -1165,25 +1204,14 @@ def inject_html(html_path, out_path, prod_data, raw_meta, cost_data,
             f"const DEMAND_BY_STREAM = {streams_json};\nconst CANCEL_DATA ="
         )
 
-    # ── SUPPLIER_REGISTRY ────────────────────────────────────────────────────
-    sr_json = json.dumps(supplier_registry, separators=(",",":"))
-    if "const SUPPLIER_REGISTRY" in html:
-        html = replace_const(html, "SUPPLIER_REGISTRY", sr_json)
-    else:
-        html = html.replace(
-            "const CANCEL_DATA =",
-            f"const SUPPLIER_REGISTRY = {sr_json};\nconst CANCEL_DATA ="
-        )
+    # SUPPLIER_REGISTRY and DEPENDENCIES_FULL are intentionally NOT injected
+    # into the Executive Dashboard — the dashboard has no views that read them.
+    # They are injected into the Scenario Planner, which does use them
+    # (raw-material cascade + supplier toggles).
+    #
+    # If a future dashboard view needs either, re-add the regex-replace block
+    # here and add the matching `const ... = {};` line in the HTML.
 
-    # ── DEPENDENCIES_FULL ────────────────────────────────────────────────────
-    deps_full_json = json.dumps(deps_full, separators=(",",":"))
-    if "const DEPENDENCIES_FULL" in html:
-        html = replace_const(html, "DEPENDENCIES_FULL", deps_full_json)
-    else:
-        html = html.replace(
-            "const CANCEL_DATA =",
-            f"const DEPENDENCIES_FULL = {deps_full_json};\nconst CANCEL_DATA ="
-        )
     # Footer date
     refresh_str = refresh_time.strftime("%B %d, %Y at %I:%M %p")
     html = re.sub(r'(<span id="footer-date">).*?(</span>)',
@@ -1257,7 +1285,6 @@ var COST_DATA          = {cost_json};
 var DEPENDENCIES       = {deps_json};
 var DEPENDENCIES_FULL  = {deps_full_js};
 var FEFO_LOTS          = {fefo_json};
-var FEFO_DEMAND        = [];
 var DEMAND_BY_STREAM   = {streams_json};
 var PROD_INPUTS        = {inputs_json};
 var SUPPLIER_REGISTRY  = {sr_json};
