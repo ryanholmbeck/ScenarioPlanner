@@ -937,9 +937,10 @@ Month inventory becomes available after lead time">Release Month</th>
         </div>
         <!-- Inline + Add lot form, toggled by button above -->
         <div id="expiry-add-form" style="display:none;margin-top:6px;padding:8px 10px;border:1px dashed var(--gold);border-radius:4px;background:rgba(218,165,32,0.05);">
-          <div style="display:grid;grid-template-columns:repeat(4, minmax(0,1fr)) auto;gap:6px;align-items:center;font-size:11px;">
+          <div style="display:grid;grid-template-columns:repeat(5, minmax(0,1fr)) auto;gap:6px;align-items:center;font-size:11px;">
             <label>Lot ID<br><input id="expiry-add-id"     type="text"   placeholder="lot number"        style="width:100%;font-size:11px;padding:3px;"></label>
             <label>Qty<br>   <input id="expiry-add-qty"    type="number" min="0" step="1"                style="width:100%;font-size:11px;padding:3px;"></label>
+            <label title="Date of manufacture — lot can't be sold before this date.">DOM<br><input id="expiry-add-dom" type="date" style="width:100%;font-size:11px;padding:3px;"></label>
             <label>Expiry<br><input id="expiry-add-expiry" type="date"                                   style="width:100%;font-size:11px;padding:3px;"></label>
             <label>Status<br><select id="expiry-add-status" style="width:100%;font-size:11px;padding:3px;"><option>OK</option><option>On Hold</option><option>At Risk</option></select></label>
             <button onclick="addLotFromExpiryForm()" style="margin-top:14px;font-size:11px;padding:5px 12px;cursor:pointer;background:var(--navy);color:#fff;border:none;border-radius:3px;font-weight:600;">Add</button>
@@ -958,6 +959,7 @@ Month inventory becomes available after lead time">Release Month</th>
                 <th data-tip="Lot number / batch ID (locked)">Lot</th>
                 <th data-tip="Product this lot belongs to">Product</th>
                 <th data-tip="Editable. OK = consumed normally; At Risk = demand won't consume before expiry; On Hold = excluded from FEFO consumption.">Lot Status</th>
+                <th data-tip="Editable. Date of manufacture — lot can't be sold before this date. Any FEFO consumption that the chain places before DOM is shown as a yellow production-gap bar on the Gantt above.">DOM</th>
                 <th data-tip="Editable. Expiry date — edits flow through the override layer and rebuild the FEFO chain on the Gantt above.">Expiry</th>
                 <th data-tip="Editable. Net available qty; edits feed FEFO burn and downstream demand cascade.">Avail Qty</th>
                 <th data-tip="Base Runout — month baseline demand fully consumes this lot in FEFO order.">Base Runout</th>
@@ -3774,7 +3776,7 @@ function updateExpiryTab(product, baseRows, scenRows) {
 
   if (!fefoBase.length) {
     document.querySelector('#tbl-expiry tbody').innerHTML =
-      '<tr><td colspan="13" class="empty-state">No lot data for this product. Use "+ Add lot" above to seed one.</td></tr>';
+      '<tr><td colspan="14" class="empty-state">No lot data for this product. Use "+ Add lot" above to seed one.</td></tr>';
     const ghost = document.getElementById('expiry-gantt');
     if (ghost) ghost.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted);font-style:italic;">No lots to render.</div>';
     return;
@@ -3925,6 +3927,7 @@ function updateExpiryTab(product, baseRows, scenRows) {
       }
 
       return { lot: lot.lot, product: lotProduct, expiry: lot.expiry, effExp,
+               dom: lot.dom || null,
                lotStatus, isOnHold, forceAtRisk,
                baseRunout, scenRunout, consumeStart, avail: lot.avail,
                baseRisk, scenRisk, bRisk, sRisk, statusDelta,
@@ -3968,6 +3971,11 @@ function updateExpiryTab(product, baseRows, scenRows) {
     const expCell = `<td><input type="date" value="${(l.expiry||'').slice(0,10)}"
         onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{expiry: this.value}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
         style="font-size:10px;padding:1px 3px;width:120px;">${shortDateMo ? `<div style="font-size:9px;color:#d97706;">eff: ${l.effExp.slice(0,10)}</div>` : ''}</td>`;
+    const hasGap   = l.dom && l.consumeStart && l.dom > l.consumeStart;
+    const domColor = hasGap ? '#d97706' : 'inherit';
+    const domCell = `<td><input type="date" value="${(l.dom||'').slice(0,10)}"
+        onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{dom: this.value || null}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+        style="font-size:10px;padding:1px 3px;width:120px;color:${domColor};${hasGap?'font-weight:700;':''}">${hasGap ? `<div title="FEFO chain wants this lot by ${l.consumeStart.slice(0,7)} but it isn\'t manufactured until ${l.dom.slice(0,7)} — yellow production gap shown on the Gantt." style="font-size:9px;color:#d97706;">⚠ gap: needs ${l.consumeStart.slice(0,7)}</div>` : ''}</td>`;
     const qtyCell = `<td style="text-align:right;"><input type="number" min="0" step="1" value="${l.avail}"
         onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{avail: parseFloat(this.value)||0}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
         style="font-size:10px;padding:1px 3px;width:80px;text-align:right;"></td>`;
@@ -4013,6 +4021,7 @@ function updateExpiryTab(product, baseRows, scenRows) {
       ${lotLabelCell}
       <td>${l.product}${inactiveBadge}</td>
       ${statusCell}
+      ${domCell}
       ${expCell}
       ${qtyCell}
       <td>${l.baseRunout.slice(0,7)}</td>
@@ -4049,17 +4058,20 @@ function addLotFromExpiryForm() {
   const product = currentProduct;
   const lot     = (document.getElementById('expiry-add-id').value || '').trim();
   const avail   = parseFloat(document.getElementById('expiry-add-qty').value);
+  const dom     = document.getElementById('expiry-add-dom').value || null;
   const expiry  = document.getElementById('expiry-add-expiry').value;
   const status  = document.getElementById('expiry-add-status').value || 'OK';
   if (!lot)          { alert('Lot id required'); return; }
   if (!(avail >= 0)) { alert('Qty required (>= 0)'); return; }
   if (!expiry)       { alert('Expiry date required'); return; }
+  if (dom && dom > expiry) { alert('DOM must be on or before Expiry'); return; }
   if (_effectiveFEFOLots().some(l => l.product === product && l.lot === lot)) {
     alert('Lot id "' + lot + '" already exists for ' + product); return;
   }
-  addNewLot(product, { lot, avail, expiry, status });
+  addNewLot(product, { lot, avail, dom, expiry, status });
   document.getElementById('expiry-add-id').value = '';
   document.getElementById('expiry-add-qty').value = '';
+  document.getElementById('expiry-add-dom').value = '';
   document.getElementById('expiry-add-expiry').value = '';
   document.getElementById('expiry-add-status').value = 'OK';
   document.getElementById('expiry-add-form').style.display = 'none';
@@ -4130,7 +4142,13 @@ function renderExpiryGantt(product, lots, opts) {
     const cStart     = l.consumeStart || today;
     // Clamp visual start to today so the bar represents the forward-looking
     // consumption window the user actually plans against.
-    const visualStart = (cStart < today) ? today : cStart;
+    const consumeVisual = (cStart < today) ? today : cStart;
+    // DOM gate: a lot can't be sold before it's manufactured. If FEFO demand
+    // wants it before DOM, the blue bar begins at DOM and a yellow gap bar
+    // marks the unmet-supply window (consumeVisual → DOM).
+    const dom        = l.dom || null;
+    const hasGap     = dom && dom > consumeVisual && dom <= (runout || dom);
+    const visualStart = hasGap ? dom : consumeVisual;
     const dynRisk     = new Date(runout) > new Date(riskCutoff);
 
     // Quantity split: portion consumed by riskCutoff vs portion at scrap risk
@@ -4175,6 +4193,8 @@ function renderExpiryGantt(product, lots, opts) {
           <span style="font-family:monospace;">${l.lot}</span>${statusBadge}
         </div>
         <div style="flex:1;position:relative;height:14px;">
+          ${hasGap ? `<div title="Production gap: FEFO demand wants this lot starting ${consumeVisual.slice(0,7)} but DOM is ${dom.slice(0,7)} — ${Math.round((new Date(dom) - new Date(consumeVisual)) / (1000*60*60*24*30.44))} mo of unmet supply.&#10;Fill from another lot or pull production forward."
+               style="position:absolute;left:${pct(consumeVisual)}%;width:${Math.max(0.3, pct(dom) - pct(consumeVisual))}%;height:100%;background:repeating-linear-gradient(45deg,#facc15,#facc15 4px,#fde68a 4px,#fde68a 8px);border:1px solid #ca8a04;border-radius:2px;opacity:0.95;z-index:1;"></div>` : ''}
           <div title="${barTooltip}"
                style="position:absolute;left:${blueLeft}%;width:${blueW}%;height:100%;background:${blueColor};border-radius:2px;opacity:${blueOpacity};z-index:2${blueExtra};"></div>
           ${dynRisk && pinkW>0 ? `<div title="Scrap-risk window ${riskCutoff.slice(0,7)} → ${runout.slice(0,7)} · ${fmt(riskQty,0)} units"
@@ -4204,6 +4224,7 @@ function renderExpiryGantt(product, lots, opts) {
       <div style="display:flex;gap:14px;font-size:10px;color:var(--muted);margin-top:6px;flex-wrap:wrap;">
         <span><span style="display:inline-block;width:14px;height:8px;background:#1a2b5e;opacity:0.78;border-radius:2px;vertical-align:middle;"></span> consumption window</span>
         <span><span style="display:inline-block;width:14px;height:8px;background:#f9a8d4;border-radius:2px;vertical-align:middle;"></span> scrap-risk zone (last ${shortDateMo}mo)</span>
+        <span><span style="display:inline-block;width:14px;height:8px;background:repeating-linear-gradient(45deg,#facc15,#facc15 3px,#fde68a 3px,#fde68a 6px);border:1px solid #ca8a04;vertical-align:middle;"></span> production gap (demand before DOM)</span>
         <span><span style="display:inline-block;width:14px;height:8px;background:#f59e0b;opacity:0.55;border:1px dashed #d97706;vertical-align:middle;"></span> On Hold</span>
         <span><span style="display:inline-block;width:2px;height:10px;background:#dc2626;vertical-align:middle;"></span> risk cutoff</span>
         <span><span style="display:inline-block;width:2px;height:10px;background:#1a2b5e;vertical-align:middle;"></span> expiry</span>
