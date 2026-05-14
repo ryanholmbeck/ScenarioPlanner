@@ -2388,33 +2388,78 @@ function computeFefoScenario(product, scenRows) {
     .sort((a,b) => a.seq - b.seq);
   if (!lots.length) return [];
 
-  // Build cumulative scenario demand map
+  // Build cumulative scenario demand map, then extrapolate beyond the loaded
+  // horizon using avg-of-last-12-months. Without this, lots whose cumulative
+  // threshold falls past the horizon end would collapse to expiry — making the
+  // Gantt bar run from chain-start to expiry (huge) and tripping spurious
+  // "NEW RISK" status when the short-shelf-life slider shifts effective expiry.
   const cumDemand = {};
+  const sortedRows = (scenRows || []).slice().sort((a,b) => a.month.localeCompare(b.month));
   let cum = 0;
-  for (const r of scenRows) {
-    cum += r.demand;
+  for (const r of sortedRows) {
+    cum += (r.demand || 0);
     cumDemand[r.month] = cum;
   }
-  const months = scenRows.map(r => r.month);
+  const totalAvail = lots.reduce((s,l) => s + (l.avail || 0), 0);
+  if (sortedRows.length) {
+    const tail = sortedRows.slice(-12);
+    const avgDemand = tail.reduce((s,r) => s + (r.demand || 0), 0) / tail.length;
+    if (avgDemand > 0) {
+      // Extrapolate forward month-by-month until we cover total available qty
+      // with a generous safety margin, or hit a hard date stop.
+      let cursor = new Date(sortedRows[sortedRows.length - 1].month);
+      const stopYear = 2060;
+      const stopCum  = totalAvail * 1.5 + avgDemand; // safety buffer
+      while (cum < stopCum && cursor.getFullYear() < stopYear) {
+        cursor.setMonth(cursor.getMonth() + 1);
+        const m = cursor.toISOString().slice(0,7) + '-01';
+        cum += avgDemand;
+        cumDemand[m] = cum;
+      }
+    }
+  }
+  const months = Object.keys(cumDemand).sort();
 
   const result = [];
   let cumulativeConsumed = 0;
+  let prevCumulative = 0;
   for (const lot of lots) {
-    cumulativeConsumed += lot.avail;
-    // Find first month where cumulative demand >= cumulative consumed
-    let runout = lot.expiry.slice(0,7) + '-01';
+    prevCumulative     = cumulativeConsumed;
+    cumulativeConsumed += (lot.avail || 0);
+
+    // consumeStart = first month where cumDemand reaches the PRIOR lot's
+    // cumulative threshold (i.e., when FEFO consumption transitions to this
+    // lot). For the first lot, this is the first month with any demand.
+    let consumeStart = null;
+    let runout       = null;
     for (const m of months) {
-      if ((cumDemand[m] || 0) >= cumulativeConsumed) {
-        runout = m; break;
-      }
+      const cd = cumDemand[m] || 0;
+      if (consumeStart === null && cd >= prevCumulative) consumeStart = m;
+      if (cd >= cumulativeConsumed) { runout = m; break; }
     }
-    const expDt  = new Date(lot.expiry.slice(0,10));
+    if (!consumeStart) consumeStart = months[0] || (lot.expiry || '').slice(0,7) + '-01';
+    if (!runout)       runout       = (lot.expiry || '').slice(0,7) + '-01';
+
+    const expDt  = new Date((lot.expiry || '').slice(0,10));
     const runDt  = new Date(runout);
     const isRisk = runDt > expDt;
+    // Risk qty = portion of this lot that demand fails to consume by expiry.
+    // = max(0, cumulativeConsumed − cumDemand[expiryMonth])  clipped to lot.avail
+    const expMonth = (lot.expiry || '').slice(0,7) + '-01';
+    let cumAtExp = cumDemand[expMonth];
+    if (cumAtExp === undefined) {
+      // Find nearest month <= expiry
+      const before = months.filter(m => m <= expMonth);
+      cumAtExp = before.length ? cumDemand[before[before.length-1]] : 0;
+    }
+    const unconsumed = Math.max(0, cumulativeConsumed - cumAtExp);
+    const scenRisk   = Math.min(lot.avail || 0, Math.round(unconsumed));
+
     result.push({
       ...lot,
+      consumeStart,
       scenRunout: runout,
-      scenRisk:   isRisk ? lot.avail : 0,
+      scenRisk,
       scenStatus: isRisk ? 'At Risk' : 'OK',
     });
   }
@@ -3708,9 +3753,13 @@ function updateExpiryTab(product, baseRows, scenRows) {
   const inactiveLPProduct = null;  // never inject companion product
 
   const fefoBase = _effectiveFEFOLots().filter(l => l.product === product)
-    .sort((a,b) => (a.expiry||'').localeCompare(b.expiry||''));
+    .sort((a,b) => (a.seq || 0) - (b.seq || 0));
   const fefoInactive = [];
-  const fefoScen = computeFefoScenario(product, scenRows);
+  // Compute base and scenario runouts via the same FEFO engine so that
+  // scen == base → no spurious risk delta (and both use horizon extrapolation
+  // to avoid runout fallback to expiry).
+  const fefoBaseChained = computeFefoScenario(product, baseRows);
+  const fefoScen        = computeFefoScenario(product, scenRows);
 
   if (!fefoBase.length) {
     document.querySelector('#tbl-expiry tbody').innerHTML =
@@ -3808,48 +3857,63 @@ function updateExpiryTab(product, baseRows, scenRows) {
     const releaseByDate = new Date(effExpDate);
     releaseByDate.setMonth(releaseByDate.getMonth() - Math.ceil(moToConsume));
 
-    return releaseByDate;
+    const startConsumeMonth = startConsumeIdx >= 0 ? rows[startConsumeIdx].month : null;
+    return {
+      date:             releaseByDate,
+      effExp,
+      cumBefore,
+      startConsumeMonth,
+      avgDem,
+      moToConsume,
+      windowMonths:     windowRows.length,
+      lotAvail:         lot.avail,
+    };
   }
 
   // Build display lots — active product first, then inactive product (all at risk)
   function buildLotRows(lotList, forceAtRisk, lotProduct) {
     return lotList.map((lot, i) => {
       const effExp     = effectiveExpiry(lot.expiry);       // short-date adjusted
-      const lotStatus  = lot.status || 'OK';                // from workbook: OK/At Risk/On Hold
+      const lotStatus  = lot.status || 'OK';
       const isOnHold   = lotStatus === 'On Hold';
-      const scenLot    = lotProduct === product ? fefoScen[i] : null;
+      const baseLot    = lotProduct === product ? fefoBaseChained[i] : null;
+      const scenLot    = lotProduct === product ? fefoScen[i]        : null;
 
       // On Hold: never consumed — demand doesn't run through it
       // forceAtRisk: inactive supply mode product — no demand at all
-      const baseRunout = (isOnHold || forceAtRisk) ? effExp : (lot.runout || lot.expiry);
+      const baseRunout = (isOnHold || forceAtRisk) ? effExp : (baseLot?.scenRunout || lot.expiry);
       const scenRunout = (isOnHold || forceAtRisk) ? effExp : (scenLot?.scenRunout || lot.expiry);
+      const consumeStart = (isOnHold || forceAtRisk) ? null : (scenLot?.consumeStart || baseLot?.consumeStart || null);
 
-      // BOTH base and scenario risk compared against same threshold (effExp)
-      // so Status Δ shows genuine scenario impact, not threshold mismatch
+      // Both base + scenario risk compared against same threshold (effExp) and
+      // computed via the same FEFO engine, so scen==base → no spurious delta.
       const bRisk = new Date(baseRunout) > new Date(effExp);
       const sRisk = new Date(scenRunout) > new Date(effExp);
-      const baseRisk = (isOnHold || forceAtRisk) ? lot.avail : (lot.risk || 0);
+      const baseRisk = (isOnHold || forceAtRisk) ? lot.avail : (baseLot?.scenRisk || 0);
       const scenRisk = (isOnHold || forceAtRisk) ? lot.avail : (scenLot?.scenRisk || 0);
-      const statusDelta = bRisk === sRisk ? '—'
-        : (!bRisk && sRisk) ? '⬆ NEW RISK' : '⬇ RESOLVED';
+      // Δ tied to qty (not just boolean) so cosmetic month-boundary differences
+      // when scen==base don't trip "NEW RISK qty 0".
+      let statusDelta = '—';
+      if (scenRisk > baseRisk + 0.5)      statusDelta = '⬆ NEW RISK';
+      else if (baseRisk > scenRisk + 0.5) statusDelta = '⬇ RESOLVED';
 
       const monthlyDemand = (isOnHold || forceAtRisk) ? 0
-        : avgDemandForLot(lotProduct, lot.runout, baseRunout);
-      const expiresWithinView = viewMo >= 999
-        || new Date(effExp) <= new Date(addMonths(new Date().toISOString().slice(0,10), viewMo));
+        : avgDemandForLot(lotProduct, consumeStart || baseRunout, baseRunout);
 
-      // Release By — only for On Hold lots
+      // Release By — only for On Hold lots — capture full justification for tooltip
       let releaseBy = null;
+      let releaseByInfo = null;
       if (isOnHold && !forceAtRisk) {
-        releaseBy = computeReleaseBy(lotList, i, lotProduct, false);
+        releaseByInfo = computeReleaseBy(lotList, i, lotProduct, false);
+        releaseBy = releaseByInfo?.date || null;
       }
 
       return { lot: lot.lot, product: lotProduct, expiry: lot.expiry, effExp,
                lotStatus, isOnHold, forceAtRisk,
-               baseRunout, scenRunout, avail: lot.avail,
+               baseRunout, scenRunout, consumeStart, avail: lot.avail,
                baseRisk, scenRisk, bRisk, sRisk, statusDelta,
-               monthlyDemand, expiresWithinView, releaseBy };
-    }).filter(l => viewMo >= 999 || l.expiresWithinView);
+               monthlyDemand, releaseBy, releaseByInfo };
+    });
   }
 
   const lots = buildLotRows(fefoBase, inactiveProduct, product);
@@ -3909,7 +3973,21 @@ function updateExpiryTab(product, baseRows, scenRows) {
         : moUntil <= 3
           ? `<span style="font-size:9px;background:#d97706;color:white;border-radius:3px;padding:1px 4px;margin-left:4px">SOON</span>`
           : '';
-      releaseByCell = `<td style="color:${rbColor};font-weight:700;white-space:nowrap">${rbStr}${rbLabel}</td>`;
+      // Build the calculation justification for the tooltip
+      const info = l.releaseByInfo;
+      let tipLines = ['Release By calculation:'];
+      if (info) {
+        tipLines.push(`1. Effective expiry = ${info.effExp}`);
+        tipLines.push(`2. Cumulative qty in FEFO lots ahead of this one = ${fmt(info.cumBefore,0)} units`);
+        tipLines.push(`3. Demand reaches that cum threshold at ${info.startConsumeMonth || '(beyond horizon)'} — so this lot would START consuming then`);
+        tipLines.push(`4. Avg monthly demand over the next ${info.windowMonths} months = ${fmt(info.avgDem,0)} units/mo`);
+        tipLines.push(`5. Months needed to consume this lot's ${fmt(info.lotAvail,0)} units = ${fmt(info.lotAvail,0)} ÷ ${fmt(info.avgDem,0)} = ${info.moToConsume.toFixed(1)} mo`);
+        tipLines.push(`6. Release By = effective expiry − ⌈${info.moToConsume.toFixed(1)}⌉ months = ${rbStr}`);
+        if (moUntil < 0) tipLines.push(`⚠ Already past — releasing now no longer leaves enough sell-through window before expiry.`);
+        else if (moUntil <= 3) tipLines.push(`⚠ Release window closes in ${moUntil} mo.`);
+      }
+      const tip = tipLines.join('\n');
+      releaseByCell = `<td title="${tip.replace(/"/g,'&quot;')}" style="color:${rbColor};font-weight:700;white-space:nowrap;cursor:help;text-decoration:underline dotted ${rbColor};">${rbStr}${rbLabel}</td>`;
     }
 
     const delCell = `<td style="text-align:center;"><button title="Delete lot" onclick="deleteLot('${safe(l.product)}','${safe(l.lot)}'); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
@@ -4021,27 +4099,30 @@ function renderExpiryGantt(product, lots, opts) {
   const yearLabels = years.map(y => `<div style="position:absolute;left:${pct(y+'-07-01')}%;transform:translateX(-50%);font-size:10px;font-weight:700;color:var(--navy);top:2px;">${y}</div>`).join('');
   const todayX = pct(today);
 
-  // Build chain consume-start dates: each non-On-Hold lot starts where the previous one ran out.
-  const sorted = filtered.slice().sort((a,b) => (a.scenRunout||'').localeCompare(b.scenRunout||''));
-  const consumeStart = {};
-  let prevEnd = today;
-  for (const l of sorted) {
-    if (l.isOnHold) { consumeStart[l.lot] = today; continue; }
-    consumeStart[l.lot] = prevEnd;
-    prevEnd = l.scenRunout || prevEnd;
-  }
+  // Render in input (seq) order; consumeStart comes from the FEFO engine so
+  // each blue bar represents the *actual* consumption window for that lot
+  // under current/scenario demand — no ad-hoc chaining here.
+  const sorted = filtered.slice();
 
   const LABEL_W = 110;
   const ROW_H   = 30;
 
   const rowsHtml = sorted.map((l, i) => {
-    const cStart = consumeStart[l.lot] || today;
-    const runout = l.scenRunout || l.expiry;
-    const expIso = l.expiry;
+    const runout     = l.scenRunout || l.expiry;
+    const expIso     = l.expiry;
     const riskCutoff = _addMonthsIso(expIso, -shortDateMo);
-    const dynRisk    = new Date(runout) > new Date(riskCutoff);
+    const cStart     = l.consumeStart || today;
+    // Clamp visual start to today so the bar represents the forward-looking
+    // consumption window the user actually plans against.
+    const visualStart = (cStart < today) ? today : cStart;
+    const dynRisk     = new Date(runout) > new Date(riskCutoff);
 
-    const blueLeft  = pct(cStart);
+    // Quantity split: portion consumed by riskCutoff vs portion at scrap risk
+    // (= scenRisk, the unconsumed remainder at expiry).
+    const riskQty  = Math.min(l.avail, Math.max(0, l.scenRisk));
+    const safeQty  = Math.max(0, l.avail - riskQty);
+
+    const blueLeft  = pct(visualStart);
     const blueRight = pct(dynRisk ? riskCutoff : runout);
     const blueW     = Math.max(0.3, blueRight - blueLeft);
     const pinkLeft  = pct(riskCutoff);
@@ -4051,11 +4132,30 @@ function renderExpiryGantt(product, lots, opts) {
     const cutoffX   = pct(riskCutoff);
     const stripeBg  = (i%2===0) ? 'rgba(26,43,94,0.02)' : 'transparent';
 
-    const blueColor = l.isOnHold ? '#f59e0b' : (l.bRisk ? '#dc2626' : '#1a2b5e');
+    const blueColor   = l.isOnHold ? '#f59e0b' : (dynRisk ? '#dc2626' : '#1a2b5e');
     const blueOpacity = l.isOnHold ? 0.55 : 0.78;
-    const blueExtra = l.isOnHold ? ';border:1px dashed #d97706' : '';
+    const blueExtra   = l.isOnHold ? ';border:1px dashed #d97706' : '';
 
-    const statusBadge = `<span style="font-size:8px;font-weight:700;background:${l.isOnHold?'#f59e0b':(l.bRisk?'#dc2626':'#15803d')};color:#fff;border-radius:2px;padding:0 4px;margin-left:4px;">${l.lotStatus}</span>`;
+    const statusBadge = `<span style="font-size:8px;font-weight:700;background:${l.isOnHold?'#f59e0b':(dynRisk?'#dc2626':'#15803d')};color:#fff;border-radius:2px;padding:0 4px;margin-left:4px;">${l.lotStatus}</span>`;
+
+    // Inline qty labels inside wide bars; floating label to the right for narrow ones.
+    const safeLabel = l.isOnHold ? 'On Hold' : `${fmt(safeQty,0)} consumed`;
+    const riskLabel = `${fmt(riskQty,0)} at scrap risk`;
+    const showInlineSafe = blueW >= 6 && !l.isOnHold;
+    const showInlineRisk = pinkW >= 6 && dynRisk;
+    const safeInline = showInlineSafe
+      ? `<div style="position:absolute;left:${blueLeft}%;width:${blueW}%;top:0;height:100%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#fff;z-index:6;pointer-events:none;white-space:nowrap;overflow:hidden;">${safeLabel}</div>`
+      : '';
+    const riskInline = showInlineRisk
+      ? `<div style="position:absolute;left:${pinkLeft}%;width:${pinkW}%;top:0;height:100%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#7f1d4d;z-index:6;pointer-events:none;white-space:nowrap;overflow:hidden;">${riskLabel}</div>`
+      : '';
+    const externalLabel = (!showInlineSafe && !showInlineRisk && !l.isOnHold)
+      ? `<div style="position:absolute;left:${Math.min(99, blueRight + (dynRisk ? pinkW : 0) + 0.5)}%;top:-1px;font-size:9px;color:var(--navy);font-weight:600;z-index:6;pointer-events:none;white-space:nowrap;">${dynRisk ? `${safeLabel} · ${riskLabel}` : safeLabel}</div>`
+      : '';
+
+    const barTooltip = l.isOnHold
+      ? `On Hold — not consumed; see Release By in the table`
+      : `Consume ${cStart.slice(0,7)} → ${(dynRisk?riskCutoff:runout).slice(0,7)}\n${fmt(safeQty,0)} units consumed before short-date cutoff${dynRisk ? `\n${fmt(riskQty,0)} units at scrap risk (cutoff → expiry)` : ''}\nTotal lot qty: ${fmt(l.avail,0)}`;
 
     return `
       <div style="display:flex;align-items:center;height:${ROW_H}px;background:${stripeBg};border-bottom:1px solid rgba(26,43,94,0.06);">
@@ -4063,10 +4163,11 @@ function renderExpiryGantt(product, lots, opts) {
           <span style="font-family:monospace;">${l.lot}</span>${statusBadge}
         </div>
         <div style="flex:1;position:relative;height:14px;">
-          <div title="Consume ${cStart.slice(0,7)} → ${(dynRisk?riskCutoff:runout).slice(0,7)} · ${fmt(l.avail,0)} units"
+          <div title="${barTooltip}"
                style="position:absolute;left:${blueLeft}%;width:${blueW}%;height:100%;background:${blueColor};border-radius:2px;opacity:${blueOpacity};z-index:2${blueExtra};"></div>
-          ${dynRisk && pinkW>0 ? `<div title="Scrap-risk window ${riskCutoff.slice(0,7)} → ${runout.slice(0,7)}"
+          ${dynRisk && pinkW>0 ? `<div title="Scrap-risk window ${riskCutoff.slice(0,7)} → ${runout.slice(0,7)} · ${fmt(riskQty,0)} units"
                style="position:absolute;left:${pinkLeft}%;width:${pinkW}%;height:100%;background:#f9a8d4;border-radius:0 2px 2px 0;opacity:0.85;z-index:3;"></div>` : ''}
+          ${safeInline}${riskInline}${externalLabel}
           ${dynRisk ? `<div style="position:absolute;left:${cutoffX}%;top:-4px;width:2px;height:22px;background:#dc2626;transform:translateX(-50%);z-index:4;"></div>` : ''}
           <div style="position:absolute;left:${expX}%;top:-4px;width:2px;height:22px;background:#1a2b5e;transform:translateX(-50%);z-index:4;"></div>
           <div style="position:absolute;left:${expX}%;top:-14px;transform:translateX(-50%);font-size:8px;font-weight:700;color:#1a2b5e;z-index:5;">exp</div>
