@@ -686,12 +686,27 @@ def read_fefo_data(wb, prod_data):
             if s:
                 lot_status = s
 
+        # Release Deadline (col M, 0-indexed = 12) and Days to Release (col N = 13)
+        # Only meaningful for on-hold lots — captures the workbook's stated
+        # date by which the lot must be released to avoid expiry risk.
+        release_deadline = None
+        days_to_release  = None
+        if len(row) > 12 and row[12] is not None:
+            release_deadline = to_iso(row[12])
+        if len(row) > 13 and row[13] is not None:
+            try:
+                days_to_release = int(safe_float(row[13]))
+            except:
+                pass
+
         lots_by_product[product].append({
             "lot_id":   lot_id,
             "expiry":   expiry,
             "avail":    net_avail,
             "sort_key": sort_key,
             "lot_status": lot_status,
+            "release_deadline": release_deadline,
+            "days_to_release":  days_to_release,
         })
 
     # Sort each product's lots by Sort Key ascending
@@ -719,10 +734,23 @@ def read_fefo_data(wb, prod_data):
             on_hold = lot.get("lot_status", "Active").lower() in ("on hold", "hold")
 
             if on_hold:
-                # Not consumed — runout = expiry (worst case), full qty at risk
-                runout_month = lot["expiry"][:7] + "-01"
-                is_risk  = True
-                risk_qty = lot["avail"]
+                # Prefer workbook's Release Deadline if provided; that's the
+                # hard date by which the lot must be released. If it's in the
+                # future, the lot is NOT at risk (we have time to release it).
+                # If absent or past, fall back to expiry-month worst case.
+                rd = lot.get("release_deadline")
+                if rd:
+                    runout_month = rd[:7] + "-01"
+                    try:
+                        rd_dt = datetime.strptime(rd[:10], "%Y-%m-%d")
+                        # At risk only if release deadline has already passed
+                        is_risk = rd_dt < datetime.now()
+                    except:
+                        is_risk = False
+                else:
+                    runout_month = lot["expiry"][:7] + "-01"
+                    is_risk = True
+                risk_qty = lot["avail"] if is_risk else 0
                 cum_for_display = cum_at_lot  # don't advance chain
             else:
                 cum_at_lot += lot["avail"]
@@ -743,6 +771,13 @@ def read_fefo_data(wb, prod_data):
                 cum_for_display = int(cum_at_lot)
 
             seq_counter[product] = seq_counter.get(product, 0) + 1
+            # Status: "On Hold" (release deadline in future = not at risk)
+            #         "On Hold - Past Due" (release deadline passed = at risk)
+            #         "At Risk" / "OK" for normal Active lots
+            if on_hold:
+                status_str = "On Hold - Past Due" if is_risk else "On Hold"
+            else:
+                status_str = "At Risk" if is_risk else "OK"
             result.append({
                 "seq":      seq_counter[product],
                 "lot":      lot["lot_id"],
@@ -751,8 +786,10 @@ def read_fefo_data(wb, prod_data):
                 "avail":    lot["avail"],
                 "cumAvail": cum_for_display,
                 "risk":     risk_qty,
-                "status":   "On Hold" if on_hold else ("At Risk" if is_risk else "OK"),
+                "status":   status_str,
                 "product":  product,
+                "release_deadline": lot.get("release_deadline"),
+                "days_to_release":  lot.get("days_to_release"),
             })
 
     at_risk = sum(1 for l in result if l["status"] == "At Risk")
