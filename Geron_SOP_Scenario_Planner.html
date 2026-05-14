@@ -627,39 +627,6 @@
       </div>
     </div>
 
-    <!-- LOTS -->
-    <div class="section" draggable="true" data-section-id="lot-editor">
-      <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span>
-        🧪 Lots <span>▼</span>
-      </div>
-      <div class="section-body">
-        <div id="lot-panel" style="font-size:11px;"></div>
-        <div id="lot-add-form" style="margin-top:8px;padding:6px 8px;border:1px dashed var(--border);border-radius:4px;background:rgba(255,255,255,0.02);">
-          <div style="font-weight:600;font-size:11px;margin-bottom:4px;">+ Add lot</div>
-          <div style="display:grid;grid-template-columns:auto 1fr;gap:3px 6px;font-size:10px;color:var(--muted);align-items:center;">
-            <span>id</span>  <input id="lot-add-id"     type="text"   placeholder="lot number" style="font-size:10px;padding:2px;">
-            <span>qty</span> <input id="lot-add-qty"    type="number" min="0" step="1"           style="font-size:10px;padding:2px;">
-            <span>exp</span> <input id="lot-add-expiry" type="date"                              style="font-size:10px;padding:2px;">
-            <span>status</span>
-            <select id="lot-add-status" style="font-size:10px;padding:2px;">
-              <option value="OK">OK</option>
-              <option value="On Hold">On Hold</option>
-              <option value="At Risk">At Risk</option>
-            </select>
-          </div>
-          <button onclick="addLotFromForm()" style="margin-top:5px;width:100%;font-size:10px;padding:3px 6px;cursor:pointer;background:var(--navy);color:#fff;border:none;border-radius:3px;">Add lot</button>
-        </div>
-        <div style="margin-top:6px;display:flex;justify-content:space-between;align-items:center;">
-          <a href="javascript:void(0)" onclick="clearLotOverrides(document.getElementById('sel-product').value); renderLotPanel(); runScenario();"
-             style="font-size:10px;color:var(--muted);text-decoration:underline;">
-            reset to workbook
-          </a>
-          <span id="lot-override-badge" style="font-size:10px;color:var(--gold);font-weight:600;display:none;">● overridden</span>
-        </div>
-        <div class="info-box" style="margin-top:6px;">Edit qty, expiry, or status on individual lots; delete a lot to remove it from FEFO; or add a fresh lot below. All edits layer over the workbook FEFO list and feed every downstream view (Expiry Risk table, runout schedule, MRP burn).</div>
-      </div>
-    </div>
-
     <!-- DEPENDENCY FACTORS -->
     <div class="section" draggable="true" data-section-id="dep-editor">
       <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span>
@@ -948,70 +915,59 @@ Month inventory becomes available after lead time">Release Month</th>
     <div id="tab-expiry" class="tab-content">
       <div class="card">
         <div class="card-header">
-          <div class="card-title" id="title-expiry-chart">FEFO / Expiry Risk Analysis</div>
-          <div class="card-subtitle">Runout vs Expiry — scenario demand shifts lot consumption</div>
+          <div class="card-title" id="title-expiry-chart">FEFO Lot Expiry &amp; Runout Timeline</div>
+          <div class="card-subtitle">Per-lot consumption window (blue) and scrap-risk zone (pink) against expiry — scenario-aware</div>
         </div>
         <!-- Expiry controls row -->
-        <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;padding:8px 0 4px;font-size:11px;">
+        <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:8px 0 4px;font-size:11px;">
           <label style="display:flex;align-items:center;gap:6px;color:var(--navy);font-weight:600;">
-            Short-date buffer:
-            <input type="range" id="expiry-short-date" min="0" max="24" step="1" value="6"
-              style="width:100px" oninput="document.getElementById('expiry-sd-disp').textContent=this.value+' mo'; updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache)">
-            <span id="expiry-sd-disp" style="min-width:36px">6 mo</span>
-            <span style="color:var(--muted);font-weight:400">(shifts effective expiry earlier)</span>
+            Short shelf-life window:
+            <input type="range" id="expiry-short-date" min="1" max="24" step="1" value="6"
+              style="width:120px;accent-color:var(--gold);" oninput="document.getElementById('expiry-sd-disp').textContent=this.value+' mo'; updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache)">
+            <span id="expiry-sd-disp" style="min-width:42px;color:var(--navy);font-weight:700">6 mo</span>
           </label>
-          <label style="display:flex;align-items:center;gap:6px;color:var(--navy);font-weight:600;">
-            View:
-            <select id="expiry-view-months" style="font-size:11px;padding:2px 4px"
-              onchange="updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache)">
-              <option value="24">24 mo</option>
-              <option value="36">36 mo</option>
-              <option value="60">60 mo</option>
-              <option value="120">10 yr</option>
-              <option value="999" selected>All</option>
-            </select>
-          </label>
+          <div style="display:inline-flex;border:1px solid var(--border);border-radius:4px;overflow:hidden;">
+            <button id="expiry-btn-all"  onclick="setExpiryView('all')"  style="font-size:10px;padding:3px 8px;border:none;cursor:pointer;background:var(--navy);color:#fff;">All lots</button>
+            <button id="expiry-btn-risk" onclick="setExpiryView('risk')" style="font-size:10px;padding:3px 8px;border:none;cursor:pointer;background:transparent;color:var(--navy);">At-risk only</button>
+          </div>
+          <button onclick="toggleExpiryAddForm()" style="font-size:10px;padding:3px 8px;cursor:pointer;background:var(--gold);color:var(--navy);border:none;border-radius:4px;font-weight:700;">+ Add lot</button>
+          <a href="javascript:void(0)" onclick="clearLotOverrides(currentProduct); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+             style="font-size:10px;color:var(--muted);text-decoration:underline;margin-left:auto;">reset lots to workbook</a>
+          <span id="expiry-override-badge" style="font-size:10px;color:var(--gold);font-weight:700;display:none;">● lot overrides active</span>
         </div>
-        <div class="chart-container" style="height:220px;">
-          <canvas id="chart-expiry"></canvas>
+        <!-- Inline + Add lot form, toggled by button above -->
+        <div id="expiry-add-form" style="display:none;margin-top:6px;padding:8px 10px;border:1px dashed var(--gold);border-radius:4px;background:rgba(218,165,32,0.05);">
+          <div style="display:grid;grid-template-columns:repeat(4, minmax(0,1fr)) auto;gap:6px;align-items:center;font-size:11px;">
+            <label>Lot ID<br><input id="expiry-add-id"     type="text"   placeholder="lot number"        style="width:100%;font-size:11px;padding:3px;"></label>
+            <label>Qty<br>   <input id="expiry-add-qty"    type="number" min="0" step="1"                style="width:100%;font-size:11px;padding:3px;"></label>
+            <label>Expiry<br><input id="expiry-add-expiry" type="date"                                   style="width:100%;font-size:11px;padding:3px;"></label>
+            <label>Status<br><select id="expiry-add-status" style="width:100%;font-size:11px;padding:3px;"><option>OK</option><option>On Hold</option><option>At Risk</option></select></label>
+            <button onclick="addLotFromExpiryForm()" style="margin-top:14px;font-size:11px;padding:5px 12px;cursor:pointer;background:var(--navy);color:#fff;border:none;border-radius:3px;font-weight:600;">Add</button>
+          </div>
+        </div>
+        <div id="expiry-gantt-wrap" style="margin-top:10px;border:1px solid var(--border);border-radius:6px;background:#fff;padding:10px 8px 6px;overflow-x:auto;">
+          <div id="expiry-gantt" style="min-width:760px;"></div>
         </div>
       </div>
       <div class="card">
-        <div class="card-header"><div class="card-title" id="title-expiry-table">Lot Detail</div></div>
+        <div class="card-header"><div class="card-title" id="title-expiry-table">Lot Detail — inline editable</div></div>
         <div class="table-wrap">
           <table id="tbl-expiry">
             <thead>
               <tr>
-                <th data-tip="Lot number / batch ID">Lot</th>
+                <th data-tip="Lot number / batch ID (locked)">Lot</th>
                 <th data-tip="Product this lot belongs to">Product</th>
-                <th data-tip="Lot status from workbook Lot Inputs tab.
-OK = being consumed normally.
-At Risk = demand will not consume before expiry.
-On Hold = excluded from consumption — deviation hold.">Lot Status</th>
-                <th data-tip="Expiry date of this lot.
-Amber = short-dated (effective expiry shifted earlier by the short-date buffer slider).">Expiry</th>
-                <th data-tip="Base Runout
-Month when baseline demand fully consumes this lot in FEFO order.">Base Runout</th>
-                <th data-tip="Scenario Runout
-Month when scenario demand (sales factor applied) fully consumes this lot.">Scen Runout</th>
-                <th data-tip="Net Available Quantity
-Lot quantity available for consumption (Qty Available minus Reserved).">Avail Qty</th>
-                <th data-tip="Avg Monthly Demand
-Average monthly demand across this lot's consumption window.
-Indicates the burn rate against this lot.">Avg Mo. Demand</th>
-                <th data-tip="Base Risk Qty
-Units still unconsumed by the short-date cutoff under the baseline forecast.
-= MAX(0, cumulative avail − cumulative demand at effective expiry)">Base Risk Qty</th>
-                <th data-tip="Scenario Risk Qty
-Units still unconsumed by the short-date cutoff under the active scenario.">Scen Risk Qty</th>
-                <th data-tip="Status Change
-Whether risk status changed between baseline and scenario.
-⬆ NEW RISK = scenario creates new expiry risk.
-⬇ RESOLVED = scenario reduces or eliminates risk.">Scen Δ</th>
-                <th data-tip="Release By (On Hold lots only)
-The last month to release this On Hold lot and still sell through before effective expiry.
-Computed as: month when cumulative demand (FEFO order, skipping other On Hold lots) would reach this lot's position in the chain — offset back by enough months to consume this lot's qty before expiry.
-Amber = release needed soon (≤3 mo). Red = already past release window.">Release By</th>
+                <th data-tip="Editable. OK = consumed normally; At Risk = demand won't consume before expiry; On Hold = excluded from FEFO consumption.">Lot Status</th>
+                <th data-tip="Editable. Expiry date — edits flow through the override layer and rebuild the FEFO chain on the Gantt above.">Expiry</th>
+                <th data-tip="Editable. Net available qty; edits feed FEFO burn and downstream demand cascade.">Avail Qty</th>
+                <th data-tip="Base Runout — month baseline demand fully consumes this lot in FEFO order.">Base Runout</th>
+                <th data-tip="Scenario Runout — month scenario demand consumes this lot.">Scen Runout</th>
+                <th data-tip="Avg monthly demand across this lot's consumption window.">Avg Mo. Demand</th>
+                <th data-tip="Units still unconsumed by short-date cutoff under baseline.">Base Risk Qty</th>
+                <th data-tip="Units still unconsumed by short-date cutoff under scenario.">Scen Risk Qty</th>
+                <th data-tip="⬆ NEW RISK = scenario creates new risk. ⬇ RESOLVED = scenario reduces risk.">Scen Δ</th>
+                <th data-tip="Release By (On Hold only) — last month to release the lot and still sell through before effective expiry.">Release By</th>
+                <th data-tip="Remove this lot from the FEFO chain.">✕</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -3758,8 +3714,9 @@ function updateExpiryTab(product, baseRows, scenRows) {
 
   if (!fefoBase.length) {
     document.querySelector('#tbl-expiry tbody').innerHTML =
-      '<tr><td colspan="12" class="empty-state">No lot data for this product.</td></tr>';
-    destroyChart('chart-expiry');
+      '<tr><td colspan="13" class="empty-state">No lot data for this product. Use "+ Add lot" above to seed one.</td></tr>';
+    const ghost = document.getElementById('expiry-gantt');
+    if (ghost) ghost.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted);font-style:italic;">No lots to render.</div>';
     return;
   }
 
@@ -3897,53 +3854,16 @@ function updateExpiryTab(product, baseRows, scenRows) {
 
   const lots = buildLotRows(fefoBase, inactiveProduct, product);
 
-  // (lot rows built above via buildLotRows)
+  // Override badge
+  const obEl = document.getElementById('expiry-override-badge');
+  if (obEl) obEl.style.display = (lotOverrides[product] && Object.keys(lotOverrides[product]).length) ? 'inline' : 'none';
 
-  // Chart
-  const barColors = lots.map(l =>
-    l.isOnHold   ? 'rgba(245,158,11,0.55)' :
-    l.bRisk      ? 'rgba(249,65,58,0.70)'  :
-    'rgba(26,122,64,0.65)'
-  );
-  const borderColors = lots.map(l =>
-    l.isOnHold ? '#d97706' : l.bRisk ? '#b91c1c' : '#15803d'
-  );
+  // Gantt
+  renderExpiryGantt(product, lots, { shortDateMo });
 
-  destroyChart('chart-expiry');
-  charts['chart-expiry'] = new Chart(
-    document.getElementById('chart-expiry'), {
-      type: 'bar',
-      data: {
-        labels: lots.map(l => l.lot.slice(-10)),
-        datasets: [
-          { label:'Available Qty', data: lots.map(l=>l.avail),
-            backgroundColor: barColors, borderColor: borderColors,
-            borderWidth: lots.map(l => l.isOnHold ? 2 : 1),
-            borderDash: [], borderRadius: 3 },
-          { label:'Scen At-Risk', data: lots.map(l=>l.scenRisk),
-            backgroundColor:'rgba(255,163,0,0.55)', borderRadius:3 },
-        ],
-      },
-      options: { responsive:true, maintainAspectRatio:false,
-        plugins:{
-          legend:{position:'top',labels:{font:{size:11}}},
-          tooltip:{callbacks:{
-            afterTitle: items => {
-              const lot = lots[items[0].dataIndex];
-              const lines = [`Exp: ${lot.effExp}${shortDateMo ? ' (short-dated −'+shortDateMo+' mo)' : ''}`];
-              if (lot.isOnHold) lines.push('⚠ On Hold');
-              if (inactiveProduct) lines.push('⚠ No demand — inactive supply mode');
-              return lines.join('\n');
-            }
-          }}
-        },
-        scales:{ x:{ticks:{font:{size:9}}}, y:{ticks:{font:{size:10}},beginAtZero:true} }
-      }
-    }
-  );
-
-  // Table
+  // Inline-editable table
   const tbody = document.querySelector('#tbl-expiry tbody');
+  const safe = s => String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;');
   tbody.innerHTML = lots.map(l => {
     const rowStyle = l.isOnHold
       ? 'background:rgba(245,158,11,0.10);border-left:3px solid #f59e0b'
@@ -3952,25 +3872,32 @@ function updateExpiryTab(product, baseRows, scenRows) {
         : l.bRisk || l.sRisk
           ? 'background:rgba(249,65,58,0.04)'
           : '';
+    const ovEntry  = getLotOverride(l.product, l.lot);
+    const isAdded  = !!(ovEntry && ovEntry._added);
+    const isMod    = !!(ovEntry && !ovEntry._added && !ovEntry._deleted);
+    const lotLabelCell = `<td style="font-family:monospace;font-size:11px;${(isAdded||isMod) ? 'border-left:2px solid var(--gold);padding-left:6px;' : ''}">${l.lot}${isAdded ? ' <span style=\"font-size:8px;color:var(--gold);font-weight:700;\">NEW</span>' : ''}</td>`;
     const inactiveBadge = l.forceAtRisk && l.product !== product
       ? ' <span style="font-size:9px;background:#dc2626;color:white;border-radius:3px;padding:1px 4px">no demand</span>'
       : '';
-    // Lot Status badge
-    const statusColor = l.lotStatus === 'On Hold'  ? '#f59e0b'
-                      : l.lotStatus === 'At Risk'   ? '#dc2626'
-                      : '#15803d';
-    const statusBadge = `<span style="font-size:9px;font-weight:700;background:${statusColor};color:white;border-radius:3px;padding:1px 5px">${l.lotStatus}</span>`;
-    const effExpDisplay = shortDateMo
-      ? `<span style="color:#d97706;font-weight:600">${l.effExp.slice(0,10)}</span> <span style="font-size:9px;color:var(--muted)">(orig: ${l.expiry.slice(0,10)})</span>`
-      : l.expiry.slice(0,10);
+    const statusColor = l.lotStatus === 'On Hold' ? '#f59e0b'
+                      : l.lotStatus === 'At Risk' ? '#dc2626' : '#15803d';
+    const statusCell = `<td><select onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{status: this.value}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+        style="font-size:10px;padding:2px 4px;color:${statusColor};font-weight:700;background:transparent;border:1px solid ${statusColor}33;border-radius:3px;">
+        ${['OK','On Hold','At Risk'].map(s => `<option value="${s}" ${s===l.lotStatus?'selected':''}>${s}</option>`).join('')}
+      </select></td>`;
+    const expCell = `<td><input type="date" value="${(l.expiry||'').slice(0,10)}"
+        onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{expiry: this.value}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+        style="font-size:10px;padding:1px 3px;width:120px;">${shortDateMo ? `<div style="font-size:9px;color:#d97706;">eff: ${l.effExp.slice(0,10)}</div>` : ''}</td>`;
+    const qtyCell = `<td style="text-align:right;"><input type="number" min="0" step="1" value="${l.avail}"
+        onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{avail: parseFloat(this.value)||0}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+        style="font-size:10px;padding:1px 3px;width:80px;text-align:right;"></td>`;
     const demandDisplay = l.monthlyDemand > 0
       ? fmt(l.monthlyDemand, 0)
       : (l.isOnHold || l.forceAtRisk) ? '<span style="color:#dc2626;font-style:italic">none</span>' : '—';
     const deltaColor = l.statusDelta === '⬆ NEW RISK' ? '#b91c1c'
                      : l.statusDelta === '⬇ RESOLVED' ? '#15803d' : 'inherit';
 
-    // Release By cell — On Hold only
-    let releaseByCell = '<td style="color:var(--muted);font-style:italic;font-size:10px">—</td>';
+    let releaseByCell = '<td></td>';
     if (l.isOnHold && l.releaseBy) {
       const today = new Date();
       const rb = l.releaseBy;
@@ -3983,25 +3910,192 @@ function updateExpiryTab(product, baseRows, scenRows) {
           ? `<span style="font-size:9px;background:#d97706;color:white;border-radius:3px;padding:1px 4px;margin-left:4px">SOON</span>`
           : '';
       releaseByCell = `<td style="color:${rbColor};font-weight:700;white-space:nowrap">${rbStr}${rbLabel}</td>`;
-    } else if (!l.isOnHold) {
-      releaseByCell = '<td></td>';
     }
 
+    const delCell = `<td style="text-align:center;"><button title="Delete lot" onclick="deleteLot('${safe(l.product)}','${safe(l.lot)}'); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+        style="font-size:12px;background:none;border:none;color:var(--red);cursor:pointer;">✕</button></td>`;
+
     return `<tr style="${rowStyle}">
-      <td>${l.lot}</td>
+      ${lotLabelCell}
       <td>${l.product}${inactiveBadge}</td>
-      <td>${statusBadge}</td>
-      <td>${effExpDisplay}</td>
+      ${statusCell}
+      ${expCell}
+      ${qtyCell}
       <td>${l.baseRunout.slice(0,7)}</td>
       <td>${l.scenRunout.slice(0,7)}</td>
-      <td style="text-align:right">${fmt(l.avail,0)}</td>
       <td style="text-align:right;color:var(--muted)">${demandDisplay}</td>
       <td style="text-align:right;color:${l.bRisk?'#b91c1c':'inherit'}">${l.bRisk?fmt(l.baseRisk,0):'—'}</td>
       <td style="text-align:right;color:${l.sRisk?'#b91c1c':'inherit'}">${l.sRisk?fmt(l.scenRisk,0):'—'}</td>
       <td style="font-weight:700;color:${deltaColor}">${l.statusDelta}</td>
       ${releaseByCell}
+      ${delCell}
     </tr>`;
   }).join('');
+}
+
+// ── Expiry Gantt (per-lot timeline, scenario-aware) ─────────────────────────
+let expiryView = 'all';     // 'all' | 'risk'
+function setExpiryView(name) {
+  expiryView = name;
+  const a = document.getElementById('expiry-btn-all');
+  const r = document.getElementById('expiry-btn-risk');
+  if (a && r) {
+    const on  = 'background:var(--navy);color:#fff;';
+    const off = 'background:transparent;color:var(--navy);';
+    a.style.cssText = 'font-size:10px;padding:3px 8px;border:none;cursor:pointer;' + (name==='all'  ? on : off);
+    r.style.cssText = 'font-size:10px;padding:3px 8px;border:none;cursor:pointer;' + (name==='risk' ? on : off);
+  }
+  updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache);
+}
+function toggleExpiryAddForm() {
+  const el = document.getElementById('expiry-add-form');
+  if (el) el.style.display = (el.style.display === 'none') ? '' : 'none';
+}
+function addLotFromExpiryForm() {
+  const product = currentProduct;
+  const lot     = (document.getElementById('expiry-add-id').value || '').trim();
+  const avail   = parseFloat(document.getElementById('expiry-add-qty').value);
+  const expiry  = document.getElementById('expiry-add-expiry').value;
+  const status  = document.getElementById('expiry-add-status').value || 'OK';
+  if (!lot)          { alert('Lot id required'); return; }
+  if (!(avail >= 0)) { alert('Qty required (>= 0)'); return; }
+  if (!expiry)       { alert('Expiry date required'); return; }
+  if (_effectiveFEFOLots().some(l => l.product === product && l.lot === lot)) {
+    alert('Lot id "' + lot + '" already exists for ' + product); return;
+  }
+  addNewLot(product, { lot, avail, expiry, status });
+  document.getElementById('expiry-add-id').value = '';
+  document.getElementById('expiry-add-qty').value = '';
+  document.getElementById('expiry-add-expiry').value = '';
+  document.getElementById('expiry-add-status').value = 'OK';
+  document.getElementById('expiry-add-form').style.display = 'none';
+  updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache);
+  runScenario();
+}
+
+function _addMonthsIso(iso, n) {
+  const d = new Date(iso);
+  d.setMonth(d.getMonth() + n);
+  return d.toISOString().slice(0,10);
+}
+
+function renderExpiryGantt(product, lots, opts) {
+  const host = document.getElementById('expiry-gantt');
+  if (!host) return;
+  const filtered = (expiryView === 'risk') ? lots.filter(l => l.bRisk || l.sRisk) : lots;
+  if (!filtered.length) {
+    host.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted);font-style:italic;">No lots match the current view.</div>';
+    return;
+  }
+  const shortDateMo = opts?.shortDateMo || 6;
+
+  // Time axis: span from a bit before the earliest start to a bit after the latest expiry.
+  const today = new Date().toISOString().slice(0,10);
+  const allDates = [];
+  for (const l of filtered) {
+    if (l.scenRunout) allDates.push(l.scenRunout);
+    if (l.baseRunout) allDates.push(l.baseRunout);
+    if (l.expiry)     allDates.push(l.expiry);
+  }
+  allDates.push(today);
+  const tMinIso = _addMonthsIso(allDates.reduce((a,b)=>a<b?a:b), -3);
+  const tMaxIso = _addMonthsIso(allDates.reduce((a,b)=>a>b?a:b),  3);
+  const tMin = new Date(tMinIso).getTime();
+  const tMax = new Date(tMaxIso).getTime();
+  const tSpan = Math.max(1, tMax - tMin);
+  const pct = iso => Math.max(0, Math.min(100, (new Date(iso).getTime() - tMin) / tSpan * 100));
+
+  // Build year + month gridlines
+  const yStart = new Date(tMinIso).getFullYear();
+  const yEnd   = new Date(tMaxIso).getFullYear();
+  const years  = []; for (let y = yStart; y <= yEnd; y++) years.push(y);
+  const months = [];
+  let g = new Date(tMinIso); g.setDate(1);
+  const gEnd = new Date(tMaxIso);
+  while (g <= gEnd) { months.push(g.toISOString().slice(0,10)); g.setMonth(g.getMonth()+1); }
+  const minorLines = months.map(m => {
+    const x = pct(m);
+    return (m.slice(5) === '01-01') ? '' : `<line x1="${x}%" y1="0" x2="${x}%" y2="100%" stroke="var(--navy)" stroke-width="0.6" opacity="0.08"/>`;
+  }).join('');
+  const majorLines = years.map(y => `<line x1="${pct(y+'-01-01')}%" y1="0" x2="${pct(y+'-01-01')}%" y2="100%" stroke="var(--navy)" stroke-width="1" opacity="0.20"/>`).join('');
+  const yearLabels = years.map(y => `<div style="position:absolute;left:${pct(y+'-07-01')}%;transform:translateX(-50%);font-size:10px;font-weight:700;color:var(--navy);top:2px;">${y}</div>`).join('');
+  const todayX = pct(today);
+
+  // Build chain consume-start dates: each non-On-Hold lot starts where the previous one ran out.
+  const sorted = filtered.slice().sort((a,b) => (a.scenRunout||'').localeCompare(b.scenRunout||''));
+  const consumeStart = {};
+  let prevEnd = today;
+  for (const l of sorted) {
+    if (l.isOnHold) { consumeStart[l.lot] = today; continue; }
+    consumeStart[l.lot] = prevEnd;
+    prevEnd = l.scenRunout || prevEnd;
+  }
+
+  const LABEL_W = 110;
+  const ROW_H   = 30;
+
+  const rowsHtml = sorted.map((l, i) => {
+    const cStart = consumeStart[l.lot] || today;
+    const runout = l.scenRunout || l.expiry;
+    const expIso = l.expiry;
+    const riskCutoff = _addMonthsIso(expIso, -shortDateMo);
+    const dynRisk    = new Date(runout) > new Date(riskCutoff);
+
+    const blueLeft  = pct(cStart);
+    const blueRight = pct(dynRisk ? riskCutoff : runout);
+    const blueW     = Math.max(0.3, blueRight - blueLeft);
+    const pinkLeft  = pct(riskCutoff);
+    const pinkRight = pct(runout);
+    const pinkW     = Math.max(0, pinkRight - pinkLeft);
+    const expX      = pct(expIso);
+    const cutoffX   = pct(riskCutoff);
+    const stripeBg  = (i%2===0) ? 'rgba(26,43,94,0.02)' : 'transparent';
+
+    const blueColor = l.isOnHold ? '#f59e0b' : (l.bRisk ? '#dc2626' : '#1a2b5e');
+    const blueOpacity = l.isOnHold ? 0.55 : 0.78;
+    const blueExtra = l.isOnHold ? ';border:1px dashed #d97706' : '';
+
+    const statusBadge = `<span style="font-size:8px;font-weight:700;background:${l.isOnHold?'#f59e0b':(l.bRisk?'#dc2626':'#15803d')};color:#fff;border-radius:2px;padding:0 4px;margin-left:4px;">${l.lotStatus}</span>`;
+
+    return `
+      <div style="display:flex;align-items:center;height:${ROW_H}px;background:${stripeBg};border-bottom:1px solid rgba(26,43,94,0.06);">
+        <div style="width:${LABEL_W}px;min-width:${LABEL_W}px;font-size:10px;color:var(--navy);text-align:right;padding-right:8px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex-shrink:0;">
+          <span style="font-family:monospace;">${l.lot}</span>${statusBadge}
+        </div>
+        <div style="flex:1;position:relative;height:14px;">
+          <div title="Consume ${cStart.slice(0,7)} → ${(dynRisk?riskCutoff:runout).slice(0,7)} · ${fmt(l.avail,0)} units"
+               style="position:absolute;left:${blueLeft}%;width:${blueW}%;height:100%;background:${blueColor};border-radius:2px;opacity:${blueOpacity};z-index:2${blueExtra};"></div>
+          ${dynRisk && pinkW>0 ? `<div title="Scrap-risk window ${riskCutoff.slice(0,7)} → ${runout.slice(0,7)}"
+               style="position:absolute;left:${pinkLeft}%;width:${pinkW}%;height:100%;background:#f9a8d4;border-radius:0 2px 2px 0;opacity:0.85;z-index:3;"></div>` : ''}
+          ${dynRisk ? `<div style="position:absolute;left:${cutoffX}%;top:-4px;width:2px;height:22px;background:#dc2626;transform:translateX(-50%);z-index:4;"></div>` : ''}
+          <div style="position:absolute;left:${expX}%;top:-4px;width:2px;height:22px;background:#1a2b5e;transform:translateX(-50%);z-index:4;"></div>
+          <div style="position:absolute;left:${expX}%;top:-14px;transform:translateX(-50%);font-size:8px;font-weight:700;color:#1a2b5e;z-index:5;">exp</div>
+        </div>
+      </div>`;
+  }).join('');
+
+  const totalH = ROW_H * sorted.length;
+  host.innerHTML = `
+    <div style="position:relative;padding-top:22px;">
+      <div style="position:relative;height:22px;margin-left:${LABEL_W}px;">${yearLabels}</div>
+      <div style="position:relative;">
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;left:${LABEL_W}px;top:0;width:calc(100% - ${LABEL_W}px);height:${totalH}px;pointer-events:none;">
+          ${majorLines}${minorLines}
+          <line x1="${todayX}%" y1="0" x2="${todayX}%" y2="100%" stroke="#6b7280" stroke-width="1" stroke-dasharray="2 2"/>
+        </svg>
+        ${rowsHtml}
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:6px;padding-left:${LABEL_W}px;">
+        <span>${tMinIso.slice(0,7)}</span><span>today</span><span>${tMaxIso.slice(0,7)}</span>
+      </div>
+      <div style="display:flex;gap:14px;font-size:10px;color:var(--muted);margin-top:6px;flex-wrap:wrap;">
+        <span><span style="display:inline-block;width:14px;height:8px;background:#1a2b5e;opacity:0.78;border-radius:2px;vertical-align:middle;"></span> consumption window</span>
+        <span><span style="display:inline-block;width:14px;height:8px;background:#f9a8d4;border-radius:2px;vertical-align:middle;"></span> scrap-risk zone (last ${shortDateMo}mo)</span>
+        <span><span style="display:inline-block;width:14px;height:8px;background:#f59e0b;opacity:0.55;border:1px dashed #d97706;vertical-align:middle;"></span> On Hold</span>
+        <span><span style="display:inline-block;width:2px;height:10px;background:#dc2626;vertical-align:middle;"></span> risk cutoff</span>
+        <span><span style="display:inline-block;width:2px;height:10px;background:#1a2b5e;vertical-align:middle;"></span> expiry</span>
+      </div>
+    </div>`;
 }
 // ══════════════════════════════════════════════════════════════════════════════
 //  UI CONTROLS
@@ -4122,84 +4216,6 @@ function renderSupplierPanel() {
   host.querySelectorAll('input[type=radio]').forEach(el => el.name = 'supplier-primary-' + product);
 }
 
-// ── Lots sidebar panel ──────────────────────────────────────────────────────
-// One row per lot for the spotlight product. Each row shows: lot id (locked),
-// editable qty, editable expiry, editable status, and a delete button. Added
-// lots are tagged with a "+ new" pill; overridden registry lots get a gold
-// border. The add-lot form below the list creates new entries.
-function renderLotPanel() {
-  const host = document.getElementById('lot-panel');
-  if (!host) return;
-  const product = document.getElementById('sel-product')?.value;
-  if (!product) { host.innerHTML = ''; return; }
-  const lots = _effectiveFEFOLots().filter(l => l.product === product)
-    .sort((a,b) => (a.seq||0) - (b.seq||0));
-  const hasOverride = !!(lotOverrides[product] && Object.keys(lotOverrides[product]).length);
-  document.getElementById('lot-override-badge').style.display = hasOverride ? 'inline' : 'none';
-
-  if (!lots.length) {
-    host.innerHTML = `<div style="color:var(--muted);font-style:italic;">No lots for ${product}. Use "+ Add lot" to seed one.</div>`;
-    return;
-  }
-  const safe = s => String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;');
-
-  host.innerHTML = lots.map(l => {
-    const ov = getLotOverride(product, l.lot);
-    const isAdded = !!(ov && ov._added);
-    const isMod   = !!(ov && !ov._added && !ov._deleted);
-    const statusColor = l.status === 'On Hold' ? '#f59e0b'
-                      : l.status === 'At Risk' ? '#dc2626' : '#15803d';
-    return `
-      <div style="border:1px solid var(--border);border-radius:4px;padding:6px 8px;margin-bottom:6px;${(isAdded||isMod) ? 'border-color:var(--gold);' : ''}">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
-          <span style="font-weight:600;font-size:11px;font-family:monospace;">${l.lot}${isAdded ? ' <span style=\"color:var(--gold);font-size:9px;font-family:sans-serif;\">+ new</span>' : ''}</span>
-          <button title="Delete lot" onclick="deleteLot('${safe(product)}','${safe(l.lot)}'); renderLotPanel(); runScenario();"
-                  style="font-size:11px;background:none;border:none;color:var(--red);cursor:pointer;padding:0 4px;">✕</button>
-        </div>
-        <div style="display:grid;grid-template-columns:auto 1fr auto 1fr;gap:3px 4px;align-items:center;margin-top:4px;font-size:10px;color:var(--muted);">
-          <span>qty</span>
-          <input type="number" min="0" step="1" value="${l.avail ?? 0}"
-            style="width:100%;font-size:10px;padding:1px 2px;"
-            onchange="setLotOverride('${safe(product)}','${safe(l.lot)}',{avail: parseFloat(this.value)||0}); renderLotPanel(); runScenario();">
-          <span>exp</span>
-          <input type="date" value="${(l.expiry||'').slice(0,10)}"
-            style="width:100%;font-size:10px;padding:1px 2px;"
-            onchange="setLotOverride('${safe(product)}','${safe(l.lot)}',{expiry: this.value || null}); renderLotPanel(); runScenario();">
-          <span>status</span>
-          <select style="width:100%;font-size:10px;padding:1px 2px;color:${statusColor};font-weight:600;"
-            onchange="setLotOverride('${safe(product)}','${safe(l.lot)}',{status: this.value}); renderLotPanel(); runScenario();">
-            ${['OK','On Hold','At Risk'].map(s => `<option value="${s}" ${s===l.status?'selected':''}>${s}</option>`).join('')}
-          </select>
-          <span style="grid-column:1/-1;font-size:9px;color:var(--muted);text-align:right;">seq ${l.seq||'?'}</span>
-        </div>
-      </div>`;
-  }).join('');
-}
-
-function addLotFromForm() {
-  const product = document.getElementById('sel-product')?.value;
-  const lotEl   = document.getElementById('lot-add-id');
-  const qtyEl   = document.getElementById('lot-add-qty');
-  const expEl   = document.getElementById('lot-add-expiry');
-  const stEl    = document.getElementById('lot-add-status');
-  if (!product || !lotEl || !qtyEl || !expEl) return;
-  const lot    = (lotEl.value || '').trim();
-  const avail  = parseFloat(qtyEl.value);
-  const expiry = expEl.value;
-  const status = stEl.value || 'OK';
-  if (!lot)             { alert('Lot id required'); return; }
-  if (!(avail >= 0))    { alert('Qty required (>= 0)'); return; }
-  if (!expiry)          { alert('Expiry date required'); return; }
-  // Reject duplicates (registry or already-added)
-  if (_effectiveFEFOLots().some(l => l.product === product && l.lot === lot)) {
-    alert('Lot id "' + lot + '" already exists for ' + product);
-    return;
-  }
-  addNewLot(product, { lot, avail, expiry, status });
-  lotEl.value = ''; qtyEl.value = ''; expEl.value = ''; stEl.value = 'OK';
-  renderLotPanel(); runScenario();
-}
-
 // ── Dependency-factor sidebar panel ─────────────────────────────────────────
 // Lists every parent||child pair in DEPENDENCIES_FULL, grouped by parent. Each
 // row of a pair (one per supplier window) gets its own editable factor input.
@@ -4288,9 +4304,9 @@ function onProductChange() {
     if (biResetEl) biResetEl.style.display = (ov === null || ov === undefined) ? 'none' : 'inline';
   }
 
-  // Repaint the Suppliers + Lots panels for the new spotlight product
+  // Repaint the Suppliers + Dependency panels for the new spotlight product
+  // (lot editing now lives on the Expiry Risk tab — no sidebar lot panel)
   renderSupplierPanel();
-  renderLotPanel();
   renderDepPanel();
 
   // ── Sync the Combined Pool tab's pair selector to match main spotlight ─
