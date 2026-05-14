@@ -627,6 +627,39 @@
       </div>
     </div>
 
+    <!-- LOTS -->
+    <div class="section" draggable="true" data-section-id="lot-editor">
+      <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span>
+        🧪 Lots <span>▼</span>
+      </div>
+      <div class="section-body">
+        <div id="lot-panel" style="font-size:11px;"></div>
+        <div id="lot-add-form" style="margin-top:8px;padding:6px 8px;border:1px dashed var(--border);border-radius:4px;background:rgba(255,255,255,0.02);">
+          <div style="font-weight:600;font-size:11px;margin-bottom:4px;">+ Add lot</div>
+          <div style="display:grid;grid-template-columns:auto 1fr;gap:3px 6px;font-size:10px;color:var(--muted);align-items:center;">
+            <span>id</span>  <input id="lot-add-id"     type="text"   placeholder="lot number" style="font-size:10px;padding:2px;">
+            <span>qty</span> <input id="lot-add-qty"    type="number" min="0" step="1"           style="font-size:10px;padding:2px;">
+            <span>exp</span> <input id="lot-add-expiry" type="date"                              style="font-size:10px;padding:2px;">
+            <span>status</span>
+            <select id="lot-add-status" style="font-size:10px;padding:2px;">
+              <option value="OK">OK</option>
+              <option value="On Hold">On Hold</option>
+              <option value="At Risk">At Risk</option>
+            </select>
+          </div>
+          <button onclick="addLotFromForm()" style="margin-top:5px;width:100%;font-size:10px;padding:3px 6px;cursor:pointer;background:var(--navy);color:#fff;border:none;border-radius:3px;">Add lot</button>
+        </div>
+        <div style="margin-top:6px;display:flex;justify-content:space-between;align-items:center;">
+          <a href="javascript:void(0)" onclick="clearLotOverrides(document.getElementById('sel-product').value); renderLotPanel(); runScenario();"
+             style="font-size:10px;color:var(--muted);text-decoration:underline;">
+            reset to workbook
+          </a>
+          <span id="lot-override-badge" style="font-size:10px;color:var(--gold);font-weight:600;display:none;">● overridden</span>
+        </div>
+        <div class="info-box" style="margin-top:6px;">Edit qty, expiry, or status on individual lots; delete a lot to remove it from FEFO; or add a fresh lot below. All edits layer over the workbook FEFO list and feed every downstream view (Expiry Risk table, runout schedule, MRP burn).</div>
+      </div>
+    </div>
+
     <!-- SCENARIOS -->
     <div class="section" draggable="true" data-section-id="scenarios">
       <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span> 
@@ -1825,6 +1858,101 @@ function _effectiveSupplierRow(product, row) {
   return Object.assign({}, row, ov);
 }
 
+// ── LOT INVENTORY OVERRIDES ─────────────────────────────────────────────────
+// lotOverrides[product][lot_id] is either:
+//   { _deleted: true }                                — hide this lot
+//   { _added: true, expiry, avail, status, seq }      — new lot inserted by user
+//   { avail?, expiry?, status? }                      — partial patch on registry lot
+// _effectiveFEFOLots() produces a merged flat array that callers use in place
+// of raw FEFO_LOTS. Persisted in localStorage as geron_lot_overrides.
+let lotOverrides = {};
+try {
+  lotOverrides = JSON.parse(localStorage.getItem('geron_lot_overrides') || '{}');
+} catch (e) { lotOverrides = {}; }
+
+function _persistLotOverrides() {
+  try { localStorage.setItem('geron_lot_overrides', JSON.stringify(lotOverrides)); } catch (e) {}
+}
+function getLotOverride(product, lotId) {
+  return (lotOverrides[product] && lotOverrides[product][lotId]) || null;
+}
+function _registryLot(product, lotId) {
+  return FEFO_LOTS.find(l => l.product === product && l.lot === lotId) || null;
+}
+// Patch a single field; auto-minimize against registry; clean up empty entries.
+function setLotOverride(product, lotId, patch) {
+  if (!lotOverrides[product]) lotOverrides[product] = {};
+  const cur = lotOverrides[product][lotId] || {};
+  const isAdded = cur._added === true;
+  const merged = Object.assign({}, cur, patch);
+  if (!isAdded && !merged._deleted) {
+    const reg = _registryLot(product, lotId);
+    if (reg) {
+      ['avail','expiry','status'].forEach(k => {
+        if (merged[k] === undefined) return;
+        const a = merged[k], b = reg[k];
+        const eq = (a === b)
+                || (typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 1e-9)
+                || (String(a) === String(b));
+        if (eq) delete merged[k];
+      });
+    }
+  }
+  // Drop empty patches
+  if (!isAdded && !merged._deleted && Object.keys(merged).length === 0) {
+    delete lotOverrides[product][lotId];
+  } else {
+    lotOverrides[product][lotId] = merged;
+  }
+  if (Object.keys(lotOverrides[product]).length === 0) delete lotOverrides[product];
+  _persistLotOverrides();
+}
+function deleteLot(product, lotId) {
+  if (!lotOverrides[product]) lotOverrides[product] = {};
+  const cur = lotOverrides[product][lotId];
+  if (cur && cur._added) {
+    delete lotOverrides[product][lotId];
+  } else {
+    lotOverrides[product][lotId] = { _deleted: true };
+  }
+  if (Object.keys(lotOverrides[product]).length === 0) delete lotOverrides[product];
+  _persistLotOverrides();
+}
+function addNewLot(product, fields) {
+  if (!lotOverrides[product]) lotOverrides[product] = {};
+  // Auto-assign seq one past the highest existing (registry + added)
+  const allSeqs = _effectiveFEFOLots()
+    .filter(l => l.product === product).map(l => l.seq || 0);
+  const nextSeq = (allSeqs.length ? Math.max(...allSeqs) : 0) + 1;
+  const lotId = fields.lot;
+  lotOverrides[product][lotId] = Object.assign({
+    _added: true, product, lot: lotId, seq: nextSeq, runout: null,
+    cumAvail: 0, risk: 0, release_deadline: null, days_to_release: null,
+  }, fields);
+  _persistLotOverrides();
+}
+function clearLotOverrides(product) {
+  delete lotOverrides[product];
+  _persistLotOverrides();
+}
+// Layered, full flat lot list. Use this everywhere instead of raw FEFO_LOTS.
+function _effectiveFEFOLots() {
+  const out = [];
+  for (const row of FEFO_LOTS) {
+    const ov = (lotOverrides[row.product] && lotOverrides[row.product][row.lot]) || null;
+    if (ov && ov._deleted) continue;
+    out.push(ov ? Object.assign({}, row, ov) : row);
+  }
+  // Append _added lots
+  for (const prod of Object.keys(lotOverrides)) {
+    for (const lotId of Object.keys(lotOverrides[prod])) {
+      const entry = lotOverrides[prod][lotId];
+      if (entry && entry._added) out.push(Object.assign({}, entry));
+    }
+  }
+  return out;
+}
+
 function getProdOverride(product, month) {
   return (prodOverrides[product] && prodOverrides[product][month] !== undefined)
     ? prodOverrides[product][month] : null;
@@ -2241,7 +2369,7 @@ function applySupplyMode(product, rows, salesFactor) {
 //  FEFO SCENARIO — recalculate runout dates based on scenario demand
 // ══════════════════════════════════════════════════════════════════════════════
 function computeFefoScenario(product, scenRows) {
-  const lots = FEFO_LOTS.filter(l => l.product === product)
+  const lots = _effectiveFEFOLots().filter(l => l.product === product)
     .sort((a,b) => a.seq - b.seq);
   if (!lots.length) return [];
 
@@ -3564,7 +3692,7 @@ function updateExpiryTab(product, baseRows, scenRows) {
   // Expiry tab shows ONLY the selected product's lots
   const inactiveLPProduct = null;  // never inject companion product
 
-  const fefoBase = FEFO_LOTS.filter(l => l.product === product)
+  const fefoBase = _effectiveFEFOLots().filter(l => l.product === product)
     .sort((a,b) => (a.expiry||'').localeCompare(b.expiry||''));
   const fefoInactive = [];
   const fefoScen = computeFefoScenario(product, scenRows);
@@ -3935,6 +4063,84 @@ function renderSupplierPanel() {
   host.querySelectorAll('input[type=radio]').forEach(el => el.name = 'supplier-primary-' + product);
 }
 
+// ── Lots sidebar panel ──────────────────────────────────────────────────────
+// One row per lot for the spotlight product. Each row shows: lot id (locked),
+// editable qty, editable expiry, editable status, and a delete button. Added
+// lots are tagged with a "+ new" pill; overridden registry lots get a gold
+// border. The add-lot form below the list creates new entries.
+function renderLotPanel() {
+  const host = document.getElementById('lot-panel');
+  if (!host) return;
+  const product = document.getElementById('sel-product')?.value;
+  if (!product) { host.innerHTML = ''; return; }
+  const lots = _effectiveFEFOLots().filter(l => l.product === product)
+    .sort((a,b) => (a.seq||0) - (b.seq||0));
+  const hasOverride = !!(lotOverrides[product] && Object.keys(lotOverrides[product]).length);
+  document.getElementById('lot-override-badge').style.display = hasOverride ? 'inline' : 'none';
+
+  if (!lots.length) {
+    host.innerHTML = `<div style="color:var(--muted);font-style:italic;">No lots for ${product}. Use "+ Add lot" to seed one.</div>`;
+    return;
+  }
+  const safe = s => String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+
+  host.innerHTML = lots.map(l => {
+    const ov = getLotOverride(product, l.lot);
+    const isAdded = !!(ov && ov._added);
+    const isMod   = !!(ov && !ov._added && !ov._deleted);
+    const statusColor = l.status === 'On Hold' ? '#f59e0b'
+                      : l.status === 'At Risk' ? '#dc2626' : '#15803d';
+    return `
+      <div style="border:1px solid var(--border);border-radius:4px;padding:6px 8px;margin-bottom:6px;${(isAdded||isMod) ? 'border-color:var(--gold);' : ''}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+          <span style="font-weight:600;font-size:11px;font-family:monospace;">${l.lot}${isAdded ? ' <span style=\"color:var(--gold);font-size:9px;font-family:sans-serif;\">+ new</span>' : ''}</span>
+          <button title="Delete lot" onclick="deleteLot('${safe(product)}','${safe(l.lot)}'); renderLotPanel(); runScenario();"
+                  style="font-size:11px;background:none;border:none;color:var(--red);cursor:pointer;padding:0 4px;">✕</button>
+        </div>
+        <div style="display:grid;grid-template-columns:auto 1fr auto 1fr;gap:3px 4px;align-items:center;margin-top:4px;font-size:10px;color:var(--muted);">
+          <span>qty</span>
+          <input type="number" min="0" step="1" value="${l.avail ?? 0}"
+            style="width:100%;font-size:10px;padding:1px 2px;"
+            onchange="setLotOverride('${safe(product)}','${safe(l.lot)}',{avail: parseFloat(this.value)||0}); renderLotPanel(); runScenario();">
+          <span>exp</span>
+          <input type="date" value="${(l.expiry||'').slice(0,10)}"
+            style="width:100%;font-size:10px;padding:1px 2px;"
+            onchange="setLotOverride('${safe(product)}','${safe(l.lot)}',{expiry: this.value || null}); renderLotPanel(); runScenario();">
+          <span>status</span>
+          <select style="width:100%;font-size:10px;padding:1px 2px;color:${statusColor};font-weight:600;"
+            onchange="setLotOverride('${safe(product)}','${safe(l.lot)}',{status: this.value}); renderLotPanel(); runScenario();">
+            ${['OK','On Hold','At Risk'].map(s => `<option value="${s}" ${s===l.status?'selected':''}>${s}</option>`).join('')}
+          </select>
+          <span style="grid-column:1/-1;font-size:9px;color:var(--muted);text-align:right;">seq ${l.seq||'?'}</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function addLotFromForm() {
+  const product = document.getElementById('sel-product')?.value;
+  const lotEl   = document.getElementById('lot-add-id');
+  const qtyEl   = document.getElementById('lot-add-qty');
+  const expEl   = document.getElementById('lot-add-expiry');
+  const stEl    = document.getElementById('lot-add-status');
+  if (!product || !lotEl || !qtyEl || !expEl) return;
+  const lot    = (lotEl.value || '').trim();
+  const avail  = parseFloat(qtyEl.value);
+  const expiry = expEl.value;
+  const status = stEl.value || 'OK';
+  if (!lot)             { alert('Lot id required'); return; }
+  if (!(avail >= 0))    { alert('Qty required (>= 0)'); return; }
+  if (!expiry)          { alert('Expiry date required'); return; }
+  // Reject duplicates (registry or already-added)
+  if (_effectiveFEFOLots().some(l => l.product === product && l.lot === lot)) {
+    alert('Lot id "' + lot + '" already exists for ' + product);
+    return;
+  }
+  addNewLot(product, { lot, avail, expiry, status });
+  lotEl.value = ''; qtyEl.value = ''; expEl.value = ''; stEl.value = 'OK';
+  renderLotPanel(); runScenario();
+}
+
 function onProductChange() {
   const selEl = document.getElementById('sel-product');
   if (!selEl) return;
@@ -3961,8 +4167,9 @@ function onProductChange() {
     if (biResetEl) biResetEl.style.display = (ov === null || ov === undefined) ? 'none' : 'inline';
   }
 
-  // Repaint the Suppliers panel for the new spotlight product
+  // Repaint the Suppliers + Lots panels for the new spotlight product
   renderSupplierPanel();
+  renderLotPanel();
 
   // ── Sync the Combined Pool tab's pair selector to match main spotlight ─
   // If the spotlight is part of a known LP+DP pair, switch the cpool-pair
@@ -4754,7 +4961,7 @@ function getModelContext() {
     }).join('\n');
 
     // FEFO lot summary
-    const lotSummary = (typeof FEFO_LOTS !== 'undefined' ? FEFO_LOTS : [])
+    const lotSummary = (typeof _effectiveFEFOLots === 'function' ? _effectiveFEFOLots() : (FEFO_LOTS || []))
       .filter(l => l.product === prod)
       .map(l => `  Lot ${l.lot}: ${l.avail} units, expires ${l.expiry}, status: ${l.status||'OK'}`)
       .join('\n');
@@ -5366,7 +5573,7 @@ function renderRunwayTab() {
   // ── On-hold lot quantities from FEFO_LOTS ─────────────────────────────────
   const showOnHold = document.getElementById('runway-show-onhold')?.checked !== false;
   function getLotQtys(prod) {
-    const lots = (typeof FEFO_LOTS !== 'undefined' ? FEFO_LOTS : []).filter(l => l.product === prod);
+    const lots = (typeof _effectiveFEFOLots === 'function' ? _effectiveFEFOLots() : (FEFO_LOTS || [])).filter(l => l.product === prod);
     const avail   = lots.filter(l => (l.status||'OK') !== 'On Hold').reduce((s,l) => s+(l.avail||0), 0);
     const onHoldQ = lots.filter(l => (l.status||'OK') === 'On Hold').reduce((s,l) => s+(l.avail||0), 0);
     return { avail, onHoldQ };
