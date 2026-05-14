@@ -660,6 +660,24 @@
       </div>
     </div>
 
+    <!-- DEPENDENCY FACTORS -->
+    <div class="section" draggable="true" data-section-id="dep-editor">
+      <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span>
+        🔗 Dependency Factors <span>▼</span>
+      </div>
+      <div class="section-body">
+        <div id="dep-panel" style="font-size:11px;"></div>
+        <div style="margin-top:6px;display:flex;justify-content:space-between;align-items:center;">
+          <a href="javascript:void(0)" onclick="clearAllDepOverrides(); renderDepPanel(); runScenario();"
+             style="font-size:10px;color:var(--muted);text-decoration:underline;">
+            reset all to workbook
+          </a>
+          <span id="dep-override-badge" style="font-size:10px;color:var(--gold);font-weight:600;display:none;">● overridden</span>
+        </div>
+        <div class="info-box" style="margin-top:6px;">Multipliers that drive the cascade: parent units × factor = child units consumed. For multi-supplier pairs each row shows its supplier and (if any) active-window. Editing here feeds <b>deriveChildDemand</b> across LP→DP→DS→RM and the Raw Material Cascade tab.</div>
+      </div>
+    </div>
+
     <!-- SCENARIOS -->
     <div class="section" draggable="true" data-section-id="scenarios">
       <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span> 
@@ -1685,12 +1703,53 @@ function _depsRowsFor(parent, child) {
   return DEPENDENCIES_FULL[`${parent}||${child}`] || [];
 }
 
-function _lookupDepFactor(parent, child, monthIso, supplier) {
+// ── DEPENDENCY FACTOR OVERRIDES ─────────────────────────────────────────────
+// depOverrides[parent||child][rowIndex] = { factor: number }
+// Layered on the canonical row before _lookupDepFactor's filter/selection.
+let depOverrides = {};
+try { depOverrides = JSON.parse(localStorage.getItem('geron_dep_overrides') || '{}'); } catch (e) { depOverrides = {}; }
+function _persistDepOverrides() {
+  try { localStorage.setItem('geron_dep_overrides', JSON.stringify(depOverrides)); } catch (e) {}
+}
+function getDepOverride(parent, child, rowIdx) {
+  const key = `${parent}||${child}`;
+  return (depOverrides[key] && depOverrides[key][rowIdx]) || null;
+}
+function setDepOverride(parent, child, rowIdx, factor) {
+  const key = `${parent}||${child}`;
   const rows = _depsRowsFor(parent, child);
-  if (!rows.length) {
+  const reg = rows[rowIdx];
+  if (!depOverrides[key]) depOverrides[key] = {};
+  if (reg && typeof factor === 'number' && Math.abs(factor - reg.factor) < 1e-12) {
+    delete depOverrides[key][rowIdx];
+  } else {
+    depOverrides[key][rowIdx] = { factor };
+  }
+  if (Object.keys(depOverrides[key]).length === 0) delete depOverrides[key];
+  _persistDepOverrides();
+}
+function clearDepOverridesForPair(parent, child) {
+  delete depOverrides[`${parent}||${child}`];
+  _persistDepOverrides();
+}
+function clearAllDepOverrides() {
+  depOverrides = {};
+  _persistDepOverrides();
+}
+function _effectiveDepRow(parent, child, rowIdx, row) {
+  const ov = getDepOverride(parent, child, rowIdx);
+  if (!ov) return row;
+  return Object.assign({}, row, ov);
+}
+
+function _lookupDepFactor(parent, child, monthIso, supplier) {
+  const rawRows = _depsRowsFor(parent, child);
+  if (!rawRows.length) {
     // fallback to DEPENDENCIES flat map
     return (typeof DEPENDENCIES !== 'undefined' && DEPENDENCIES) ? (DEPENDENCIES[child] || 0) : 0;
   }
+  // Overlay overrides per row index
+  const rows = rawRows.map((r, i) => _effectiveDepRow(parent, child, i, r));
   // Prefer supplier-specific match active for this month
   const supRows = rows.filter(r => r.supplier === supplier);
   const generalRows = rows.filter(r => !r.supplier);
@@ -4141,6 +4200,68 @@ function addLotFromForm() {
   renderLotPanel(); runScenario();
 }
 
+// ── Dependency-factor sidebar panel ─────────────────────────────────────────
+// Lists every parent||child pair in DEPENDENCIES_FULL, grouped by parent. Each
+// row of a pair (one per supplier window) gets its own editable factor input.
+// Edits route through setDepOverride() and re-trigger runScenario so cascade
+// views (Raw Material Cascade tab, tiered MRP) reflect the new multiplier.
+function renderDepPanel() {
+  const host = document.getElementById('dep-panel');
+  if (!host) return;
+  if (typeof DEPENDENCIES_FULL === 'undefined' || !DEPENDENCIES_FULL) {
+    host.innerHTML = '<div style="color:var(--muted);font-style:italic;">No dependency registry loaded.</div>';
+    return;
+  }
+  const pairs = Object.keys(DEPENDENCIES_FULL);
+  // Sort: LP→DP first, DP→DS second, DS→RM last
+  const tier = p => {
+    if (/LP\|\|.*DP/.test(p)) return 0;
+    if (/DP\|\|.*Drug Substance/.test(p)) return 1;
+    if (/Drug Substance\|\|/.test(p)) return 2;
+    return 3;
+  };
+  pairs.sort((a,b) => tier(a) - tier(b) || a.localeCompare(b));
+
+  const hasOverride = Object.keys(depOverrides).length > 0;
+  document.getElementById('dep-override-badge').style.display = hasOverride ? 'inline' : 'none';
+
+  const safe = s => String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  const fmtFactor = f => {
+    if (!isFinite(f)) return '';
+    if (Math.abs(f) >= 0.01) return f.toFixed(6).replace(/\.?0+$/, '');
+    return f.toExponential(4);
+  };
+
+  host.innerHTML = pairs.map(pairKey => {
+    const [parent, child] = pairKey.split('||');
+    const rows = DEPENDENCIES_FULL[pairKey] || [];
+    const pairHasOverride = !!depOverrides[pairKey];
+    return `
+      <div style="border:1px solid var(--border);border-radius:4px;padding:6px 8px;margin-bottom:6px;${pairHasOverride ? 'border-color:var(--gold);' : ''}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+          <span style="font-weight:600;font-size:11px;">${parent} → ${child}</span>
+          ${pairHasOverride ? `<a href="javascript:void(0)" onclick="clearDepOverridesForPair('${safe(parent)}','${safe(child)}'); renderDepPanel(); runScenario();" style="font-size:9px;color:var(--muted);text-decoration:underline;">reset</a>` : ''}
+        </div>
+        ${rows.map((r, idx) => {
+          const eff = _effectiveDepRow(parent, child, idx, r);
+          const isOver = !!getDepOverride(parent, child, idx);
+          const supLabel = r.supplier || 'any supplier';
+          const window = (r.active_from || r.active_through)
+            ? ` <span style="font-size:9px;color:var(--muted);">[${(r.active_from||'').slice(0,7) || '—'} → ${(r.active_through||'').slice(0,7) || '∞'}]</span>`
+            : '';
+          return `
+            <div style="display:grid;grid-template-columns:1fr auto;gap:3px 6px;margin-top:4px;align-items:center;font-size:10px;color:var(--muted);">
+              <span>${supLabel}${window}</span>
+              <input type="number" step="any" value="${fmtFactor(eff.factor)}"
+                style="width:90px;font-size:10px;padding:1px 2px;${isOver ? 'border-color:var(--gold);' : ''}"
+                onchange="setDepOverride('${safe(parent)}','${safe(child)}',${idx}, parseFloat(this.value)); renderDepPanel(); runScenario();">
+              <span style="grid-column:1/-1;font-size:9px;color:var(--muted);">${r.basis || ''}${isOver ? ` <span style="color:var(--gold);">(workbook ${fmtFactor(r.factor)})</span>` : ''}</span>
+            </div>`;
+        }).join('')}
+      </div>`;
+  }).join('');
+}
+
 function onProductChange() {
   const selEl = document.getElementById('sel-product');
   if (!selEl) return;
@@ -4170,6 +4291,7 @@ function onProductChange() {
   // Repaint the Suppliers + Lots panels for the new spotlight product
   renderSupplierPanel();
   renderLotPanel();
+  renderDepPanel();
 
   // ── Sync the Combined Pool tab's pair selector to match main spotlight ─
   // If the spotlight is part of a known LP+DP pair, switch the cpool-pair
