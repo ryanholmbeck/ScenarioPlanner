@@ -2419,6 +2419,20 @@ function computeFefoScenario(product, scenRows) {
     }
   }
   const months = Object.keys(cumDemand).sort();
+  // Lookup: cumulative demand at or before the given month (clamped).
+  function cumDemandAt(iso) {
+    const m = (iso || '').slice(0,10);
+    if (!months.length) return 0;
+    if (m <= months[0])  return cumDemand[months[0]] || 0;
+    if (m >= months[months.length-1]) return cumDemand[months[months.length-1]] || 0;
+    // Binary search would be fine; data is small enough for linear scan.
+    let last = 0;
+    for (const k of months) {
+      if (k > m) break;
+      last = cumDemand[k] || last;
+    }
+    return last;
+  }
 
   const result = [];
   let cumulativeConsumed = 0;
@@ -2427,9 +2441,6 @@ function computeFefoScenario(product, scenRows) {
     prevCumulative     = cumulativeConsumed;
     cumulativeConsumed += (lot.avail || 0);
 
-    // consumeStart = first month where cumDemand reaches the PRIOR lot's
-    // cumulative threshold (i.e., when FEFO consumption transitions to this
-    // lot). For the first lot, this is the first month with any demand.
     let consumeStart = null;
     let runout       = null;
     for (const m of months) {
@@ -2443,15 +2454,11 @@ function computeFefoScenario(product, scenRows) {
     const expDt  = new Date((lot.expiry || '').slice(0,10));
     const runDt  = new Date(runout);
     const isRisk = runDt > expDt;
-    // Risk qty = portion of this lot that demand fails to consume by expiry.
-    // = max(0, cumulativeConsumed − cumDemand[expiryMonth])  clipped to lot.avail
+    // scenRisk = unconsumed portion of THIS lot at the lot's actual expiry.
+    // Risk qty AT A SLIDER-ADJUSTED cutoff is computed by the caller using
+    // cumDemandAt(effExp); see updateExpiryTab.
     const expMonth = (lot.expiry || '').slice(0,7) + '-01';
-    let cumAtExp = cumDemand[expMonth];
-    if (cumAtExp === undefined) {
-      // Find nearest month <= expiry
-      const before = months.filter(m => m <= expMonth);
-      cumAtExp = before.length ? cumDemand[before[before.length-1]] : 0;
-    }
+    const cumAtExp = cumDemandAt(expMonth);
     const unconsumed = Math.max(0, cumulativeConsumed - cumAtExp);
     const scenRisk   = Math.min(lot.avail || 0, Math.round(unconsumed));
 
@@ -2459,10 +2466,14 @@ function computeFefoScenario(product, scenRows) {
       ...lot,
       consumeStart,
       scenRunout: runout,
+      prevCum:    prevCumulative,
+      lotCum:     cumulativeConsumed,
       scenRisk,
       scenStatus: isRisk ? 'At Risk' : 'OK',
     });
   }
+  // Attach lookup as an array property — preserves [i] indexing for callers.
+  result.cumDemandAt = cumDemandAt;
   return result;
 }
 
@@ -3885,12 +3896,17 @@ function updateExpiryTab(product, baseRows, scenRows) {
       const scenRunout = (isOnHold || forceAtRisk) ? effExp : (scenLot?.scenRunout || lot.expiry);
       const consumeStart = (isOnHold || forceAtRisk) ? null : (scenLot?.consumeStart || baseLot?.consumeStart || null);
 
-      // Both base + scenario risk compared against same threshold (effExp) and
-      // computed via the same FEFO engine, so scen==base → no spurious delta.
+      // Both base + scenario risk compared against the same threshold (effExp)
+      // AND computed at that threshold (not at the lot's actual expiry). This
+      // is the key fix: with shortDateMo > 0, runout can fall past riskCutoff
+      // even when the lot fully consumes before actual expiry — so risk-qty
+      // must be measured at riskCutoff (= effExp), not at expiry.
       const bRisk = new Date(baseRunout) > new Date(effExp);
       const sRisk = new Date(scenRunout) > new Date(effExp);
-      const baseRisk = (isOnHold || forceAtRisk) ? lot.avail : (baseLot?.scenRisk || 0);
-      const scenRisk = (isOnHold || forceAtRisk) ? lot.avail : (scenLot?.scenRisk || 0);
+      const baseRisk = (isOnHold || forceAtRisk) ? lot.avail
+        : (baseLot ? Math.min(lot.avail, Math.max(0, baseLot.lotCum - fefoBaseChained.cumDemandAt(effExp))) : 0);
+      const scenRisk = (isOnHold || forceAtRisk) ? lot.avail
+        : (scenLot ? Math.min(lot.avail, Math.max(0, scenLot.lotCum - fefoScen.cumDemandAt(effExp))) : 0);
       // Δ tied to qty (not just boolean) so cosmetic month-boundary differences
       // when scen==base don't trip "NEW RISK qty 0".
       let statusDelta = '—';
