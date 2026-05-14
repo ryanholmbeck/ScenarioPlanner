@@ -609,6 +609,24 @@
       </div>
     </div>
 
+    <!-- SUPPLIERS -->
+    <div class="section" draggable="true" data-section-id="suppliers">
+      <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span>
+        🏭 Suppliers <span>▼</span>
+      </div>
+      <div class="section-body">
+        <div id="supplier-panel" style="font-size:11px;"></div>
+        <div style="margin-top:6px;display:flex;justify-content:space-between;align-items:center;">
+          <a href="javascript:void(0)" onclick="clearSupplierOverrides(document.getElementById('sel-product').value); renderSupplierPanel(); runScenario();"
+             style="font-size:10px;color:var(--muted);text-decoration:underline;">
+            reset to workbook
+          </a>
+          <span id="supplier-override-badge" style="font-size:10px;color:var(--gold);font-weight:600;display:none;">● overridden</span>
+        </div>
+        <div class="info-box" style="margin-top:6px;">Toggle which suppliers are active and which is primary. Overrides layer on top of the workbook registry — production scheduling will pick from the active set per the same date-window rules.</div>
+      </div>
+    </div>
+
     <!-- SCENARIOS -->
     <div class="section" draggable="true" data-section-id="scenarios">
       <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span> 
@@ -1751,6 +1769,38 @@ function clearBIOverride(product) {
   try { localStorage.setItem('geron_bi_overrides', JSON.stringify(biOverrides)); } catch (e) {}
 }
 
+// ── SUPPLIER TOGGLE OVERRIDES ───────────────────────────────────────────────
+// supplierOverrides[product][supplier] = { manual_toggle: 0|1, primary: 0|1 }
+// Layered on top of SUPPLIER_REGISTRY so the workbook stays canonical. A field
+// only counts as "overridden" if it's present; missing fields fall through to
+// the registry value. Persisted to localStorage.
+let supplierOverrides = {};
+try {
+  supplierOverrides = JSON.parse(localStorage.getItem('geron_supplier_overrides') || '{}');
+} catch (e) { supplierOverrides = {}; }
+
+function _persistSupplierOverrides() {
+  try { localStorage.setItem('geron_supplier_overrides', JSON.stringify(supplierOverrides)); } catch (e) {}
+}
+function getSupplierOverride(product, supplier) {
+  return (supplierOverrides[product] && supplierOverrides[product][supplier]) || null;
+}
+function setSupplierOverride(product, supplier, patch) {
+  if (!supplierOverrides[product]) supplierOverrides[product] = {};
+  supplierOverrides[product][supplier] = Object.assign({}, supplierOverrides[product][supplier] || {}, patch);
+  _persistSupplierOverrides();
+}
+function clearSupplierOverrides(product) {
+  delete supplierOverrides[product];
+  _persistSupplierOverrides();
+}
+// Return a shallow merge of registry row + override. Doesn't mutate the registry.
+function _effectiveSupplierRow(product, row) {
+  const ov = getSupplierOverride(product, row.supplier);
+  if (!ov) return row;
+  return Object.assign({}, row, ov);
+}
+
 function getProdOverride(product, month) {
   return (prodOverrides[product] && prodOverrides[product][month] !== undefined)
     ? prodOverrides[product][month] : null;
@@ -1899,7 +1949,7 @@ function _srRowsFor(product) {
 //      ("use whichever is newer")
 // Returns null if no supplier matches.
 function getActiveSupplier(product, monthIso) {
-  const rows = _srRowsFor(product);
+  const rows = _srRowsFor(product).map(r => _effectiveSupplierRow(product, r));
   if (!rows.length) return null;
   const cands = rows.filter(r => {
     if (r.manual_toggle !== 1) return false;
@@ -2601,13 +2651,27 @@ function runScenario() {
       prod: r.compProd || 0,
     }));
 
-    // Update sidebar params to reflect combined targets
+    // Reflect combined targets in sidebar — but only on transition into combine
+    // mode. Re-writing on every runScenario() clobbers what the user just typed,
+    // since oninput fires this function on every keystroke. We snapshot the
+    // user's per-product values on entry and restore them on exit.
     const tMOHEl = document.getElementById('param-target-moh');
     const cMOHEl = document.getElementById('param-critical-moh');
-    if (tMOHEl) tMOHEl.value = COMBINED_TARGET_MOH;
-    if (cMOHEl) cMOHEl.value = COMBINED_CRITICAL_MOH;
+    if (!window._combineActive) {
+      // entering combined mode: stash + apply combined targets, disable inputs
+      window._preCombineTarget   = tMOHEl ? tMOHEl.value : '';
+      window._preCombineCritical = cMOHEl ? cMOHEl.value : '';
+      if (tMOHEl) { tMOHEl.value = COMBINED_TARGET_MOH;   tMOHEl.disabled = true; tMOHEl.title = 'Combined pool uses 18mo target — uncheck Combine LP+DP to edit'; }
+      if (cMOHEl) { cMOHEl.value = COMBINED_CRITICAL_MOH; cMOHEl.disabled = true; cMOHEl.title = 'Combined pool uses 16mo critical — uncheck Combine LP+DP to edit'; }
+    }
 
     updateProductTitles(product + ' + ' + companion);
+  } else if (window._combineActive) {
+    // exiting combined mode: restore the user's pre-combine values and re-enable
+    const tMOHEl = document.getElementById('param-target-moh');
+    const cMOHEl = document.getElementById('param-critical-moh');
+    if (tMOHEl) { tMOHEl.disabled = false; tMOHEl.title = ''; if (window._preCombineTarget   !== undefined && window._preCombineTarget   !== '') tMOHEl.value = window._preCombineTarget; }
+    if (cMOHEl) { cMOHEl.disabled = false; cMOHEl.title = ''; if (window._preCombineCritical !== undefined && window._preCombineCritical !== '') cMOHEl.value = window._preCombineCritical; }
   }
 
   // Expose for production table companion column
@@ -3776,6 +3840,61 @@ document.querySelectorAll('.tab').forEach((tab, idx) => {
   }
 });
 
+// ── Suppliers sidebar panel ─────────────────────────────────────────────────
+// Renders one row per supplier for the spotlight product. Each row has an
+// "active" checkbox (manual_toggle) and a "primary" radio. Edits flow through
+// setSupplierOverride() → getActiveSupplier() reads the layered value.
+function renderSupplierPanel() {
+  const host = document.getElementById('supplier-panel');
+  if (!host) return;
+  const product = document.getElementById('sel-product')?.value;
+  if (!product) { host.innerHTML = ''; return; }
+  const rows = (typeof SUPPLIER_REGISTRY !== 'undefined' && SUPPLIER_REGISTRY[product]) || [];
+  if (!rows.length) {
+    host.innerHTML = `<div style="color:var(--muted);font-style:italic;">No supplier registry for ${product}.</div>`;
+    document.getElementById('supplier-override-badge').style.display = 'none';
+    return;
+  }
+  const hasOverride = !!(supplierOverrides[product] && Object.keys(supplierOverrides[product]).length);
+  document.getElementById('supplier-override-badge').style.display = hasOverride ? 'inline' : 'none';
+
+  const fmtWindow = r => {
+    const a = r.active_from ? r.active_from.slice(0,7) : '—';
+    const b = r.active_through ? r.active_through.slice(0,7) : '∞';
+    return `${a} → ${b}`;
+  };
+  const safe = s => String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+
+  host.innerHTML = rows.map((r, idx) => {
+    const eff = _effectiveSupplierRow(product, r);
+    const isActive  = eff.manual_toggle === 1;
+    const isPrimary = eff.primary === 1;
+    const isOver    = !!getSupplierOverride(product, r.supplier);
+    return `
+      <div style="border:1px solid var(--border);border-radius:4px;padding:6px 8px;margin-bottom:6px;${isOver ? 'border-color:var(--gold);' : ''}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+          <span style="font-weight:600;font-size:11px;">${r.supplier}</span>
+          <span style="font-size:9px;color:var(--muted);">${fmtWindow(r)}</span>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:3px;font-size:10px;color:var(--muted);">
+          <label style="display:flex;gap:3px;align-items:center;cursor:pointer;">
+            <input type="checkbox" ${isActive ? 'checked' : ''} style="accent-color:var(--gold);"
+              onchange="setSupplierOverride('${safe(product)}','${safe(r.supplier)}',{manual_toggle: this.checked ? 1 : 0}); renderSupplierPanel(); runScenario();">
+            <span>active</span>
+          </label>
+          <label style="display:flex;gap:3px;align-items:center;cursor:pointer;">
+            <input type="radio" name="supplier-primary-${idx}-group" ${isPrimary ? 'checked' : ''} style="accent-color:var(--navy);"
+              onchange="(function(){var prod='${safe(product)}'; (SUPPLIER_REGISTRY[prod]||[]).forEach(function(rr){ setSupplierOverride(prod, rr.supplier, {primary: rr.supplier==='${safe(r.supplier)}' ? 1 : 0}); }); renderSupplierPanel(); runScenario();})()">
+            <span>primary</span>
+          </label>
+          <span style="font-size:9px;margin-left:auto;color:var(--muted);">batch ${r.batch_size}, lt ${r.lead_time}mo</span>
+        </div>
+      </div>`;
+  }).join('');
+  // Radio groups: all suppliers for this product share one "primary" group
+  host.querySelectorAll('input[type=radio]').forEach(el => el.name = 'supplier-primary-' + product);
+}
+
 function onProductChange() {
   const selEl = document.getElementById('sel-product');
   if (!selEl) return;
@@ -3801,6 +3920,9 @@ function onProductChange() {
     biEl.placeholder = def === '' ? 'From workbook' : `Workbook: ${Math.round(def).toLocaleString()}`;
     if (biResetEl) biResetEl.style.display = (ov === null || ov === undefined) ? 'none' : 'inline';
   }
+
+  // Repaint the Suppliers panel for the new spotlight product
+  renderSupplierPanel();
 
   // ── Sync the Combined Pool tab's pair selector to match main spotlight ─
   // If the spotlight is part of a known LP+DP pair, switch the cpool-pair
