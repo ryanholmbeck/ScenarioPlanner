@@ -623,7 +623,7 @@
           </a>
           <span id="supplier-override-badge" style="font-size:10px;color:var(--gold);font-weight:600;display:none;">● overridden</span>
         </div>
-        <div class="info-box" style="margin-top:6px;">Toggle which suppliers are active and which is primary. Overrides layer on top of the workbook registry — production scheduling will pick from the active set per the same date-window rules.</div>
+        <div class="info-box" style="margin-top:6px;">Toggle active/primary and edit batch size, lead time, or start month. Overrides layer on top of the workbook registry and are <b>global</b> — they apply to single-product MRP, multi-tier cascade, and combined LP+DP pool views alike. The "● live" tag marks the supplier scheduling is currently using for today's month.</div>
       </div>
     </div>
 
@@ -1785,9 +1785,33 @@ function _persistSupplierOverrides() {
 function getSupplierOverride(product, supplier) {
   return (supplierOverrides[product] && supplierOverrides[product][supplier]) || null;
 }
+// Find the registry row for a supplier by name (for minimization).
+function _supplierRegistryRow(product, supplier) {
+  const rows = _srRowsFor(product);
+  return rows.find(r => r.supplier === supplier) || null;
+}
+// Apply a patch, then drop fields that equal the registry value (so badges
+// reflect "actually different from workbook") and drop empty entries.
 function setSupplierOverride(product, supplier, patch) {
   if (!supplierOverrides[product]) supplierOverrides[product] = {};
-  supplierOverrides[product][supplier] = Object.assign({}, supplierOverrides[product][supplier] || {}, patch);
+  const merged = Object.assign({}, supplierOverrides[product][supplier] || {}, patch);
+  const reg = _supplierRegistryRow(product, supplier);
+  if (reg) {
+    Object.keys(merged).forEach(k => {
+      // Treat numeric-ish equality loosely; null/'' treated as equal.
+      const a = merged[k], b = reg[k];
+      const eq = (a === b) || (a == null && b == null) || (a === '' && b == null)
+              || (typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 1e-9)
+              || (String(a) === String(b));
+      if (eq) delete merged[k];
+    });
+  }
+  if (Object.keys(merged).length === 0) {
+    delete supplierOverrides[product][supplier];
+    if (Object.keys(supplierOverrides[product]).length === 0) delete supplierOverrides[product];
+  } else {
+    supplierOverrides[product][supplier] = merged;
+  }
   _persistSupplierOverrides();
 }
 function clearSupplierOverrides(product) {
@@ -3858,23 +3882,26 @@ function renderSupplierPanel() {
   const hasOverride = !!(supplierOverrides[product] && Object.keys(supplierOverrides[product]).length);
   document.getElementById('supplier-override-badge').style.display = hasOverride ? 'inline' : 'none';
 
-  const fmtWindow = r => {
-    const a = r.active_from ? r.active_from.slice(0,7) : '—';
-    const b = r.active_through ? r.active_through.slice(0,7) : '∞';
-    return `${a} → ${b}`;
-  };
+  const fmtThrough = r => r.active_through ? r.active_through.slice(0,7) : '∞';
   const safe = s => String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  // Find the supplier getActiveSupplier() would pick "now" so the user can see
+  // their toggle land on a different row.
+  const todayIso = new Date().toISOString().slice(0,10);
+  const nowPick  = getActiveSupplier(product, todayIso);
+  const nowName  = nowPick ? nowPick.supplier : null;
 
   host.innerHTML = rows.map((r, idx) => {
     const eff = _effectiveSupplierRow(product, r);
     const isActive  = eff.manual_toggle === 1;
     const isPrimary = eff.primary === 1;
     const isOver    = !!getSupplierOverride(product, r.supplier);
+    const isLive    = (r.supplier === nowName);
+    const fromMonth = (eff.active_from || '').slice(0,7);  // YYYY-MM for <input type=month>
     return `
-      <div style="border:1px solid var(--border);border-radius:4px;padding:6px 8px;margin-bottom:6px;${isOver ? 'border-color:var(--gold);' : ''}">
+      <div style="border:1px solid var(--border);border-radius:4px;padding:6px 8px;margin-bottom:6px;${isOver ? 'border-color:var(--gold);' : ''}${isLive ? 'background:rgba(218,165,32,0.06);' : ''}">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
-          <span style="font-weight:600;font-size:11px;">${r.supplier}</span>
-          <span style="font-size:9px;color:var(--muted);">${fmtWindow(r)}</span>
+          <span style="font-weight:600;font-size:11px;">${r.supplier}${isLive ? ' <span style=\"color:var(--gold);font-size:9px;\">● live</span>' : ''}</span>
+          <span style="font-size:9px;color:var(--muted);">→ ${fmtThrough(r)}</span>
         </div>
         <div style="display:flex;gap:10px;align-items:center;margin-top:3px;font-size:10px;color:var(--muted);">
           <label style="display:flex;gap:3px;align-items:center;cursor:pointer;">
@@ -3887,7 +3914,20 @@ function renderSupplierPanel() {
               onchange="(function(){var prod='${safe(product)}'; (SUPPLIER_REGISTRY[prod]||[]).forEach(function(rr){ setSupplierOverride(prod, rr.supplier, {primary: rr.supplier==='${safe(r.supplier)}' ? 1 : 0}); }); renderSupplierPanel(); runScenario();})()">
             <span>primary</span>
           </label>
-          <span style="font-size:9px;margin-left:auto;color:var(--muted);">batch ${r.batch_size}, lt ${r.lead_time}mo</span>
+        </div>
+        <div style="display:grid;grid-template-columns:auto 1fr auto 1fr auto 1fr;gap:3px 4px;align-items:center;margin-top:4px;font-size:10px;color:var(--muted);">
+          <span>batch</span>
+          <input type="number" min="0" step="1" value="${eff.batch_size ?? ''}"
+            style="width:100%;font-size:10px;padding:1px 2px;"
+            onchange="setSupplierOverride('${safe(product)}','${safe(r.supplier)}',{batch_size: parseFloat(this.value)||0}); renderSupplierPanel(); runScenario();">
+          <span>lt</span>
+          <input type="number" min="0" step="1" value="${eff.lead_time ?? ''}"
+            style="width:100%;font-size:10px;padding:1px 2px;"
+            onchange="setSupplierOverride('${safe(product)}','${safe(r.supplier)}',{lead_time: parseFloat(this.value)||0}); renderSupplierPanel(); runScenario();">
+          <span>from</span>
+          <input type="month" value="${fromMonth}"
+            style="width:100%;font-size:10px;padding:1px 2px;"
+            onchange="setSupplierOverride('${safe(product)}','${safe(r.supplier)}',{active_from: this.value ? this.value + '-01' : null}); renderSupplierPanel(); runScenario();">
         </div>
       </div>`;
   }).join('');
