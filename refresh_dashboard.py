@@ -369,6 +369,21 @@ def read_planning_engine(wb, controls):
         })
 
     print(f"  ✅ Planning Engine: {len(rows)} rows ({len(set(r['product'] for r in rows))} products)")
+
+    # Cache-staleness sanity check. openpyxl reads `data_only=True` which means
+    # we get whatever Excel cached on the last save — if the workbook was never
+    # calculated, those cells come back as None or 0. Warn the user before
+    # they get an HTML with phantom-empty data.
+    if rows:
+        nonzero_demand = sum(1 for r in rows if r.get("demand", 0))
+        nonzero_bi     = sum(1 for r in rows if r.get("bi", 0))
+        if nonzero_demand < len(rows) * 0.1:
+            print(f"  ⚠  WARNING: only {nonzero_demand}/{len(rows)} rows have a demand value.")
+            print(f"     This usually means the workbook has not been recalculated since formulas changed.")
+            print(f"     In Excel:  Formulas → Calculate Now  (or Ctrl+Alt+F9)  →  save  →  re-run this script.")
+        if nonzero_bi < len(rows) * 0.1:
+            print(f"  ⚠  WARNING: only {nonzero_bi}/{len(rows)} rows have a beginning-inventory value.")
+
     return rows
 
 def _calc_risk(moh, target=6, critical=3, overstock=18):
