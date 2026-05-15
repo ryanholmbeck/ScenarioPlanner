@@ -4005,10 +4005,24 @@ function updateExpiryTab(product, baseRows, scenRows) {
       const baseLot    = lotProduct === product ? fefoBaseChained[i] : null;
       const scenLot    = lotProduct === product ? fefoScen[i]        : null;
 
-      // On Hold: never consumed — demand doesn't run through it
-      // forceAtRisk: inactive supply mode product — no demand at all
-      const baseRunout    = (isOnHold || forceAtRisk) ? effExp : (baseLot?.scenRunout || lot.expiry);
-      const scenRunout    = (isOnHold || forceAtRisk) ? effExp : (scenLot?.scenRunout || lot.expiry);
+      // Trust the workbook for the BASE view. lot.runout and lot.risk are
+      // precomputed values exported with the planner — live demand recompute
+      // can drift from them (the workbook's runouts implicitly assume a
+      // demand growth curve that may not exactly match what's loaded in
+      // PROD_DATA today). Showing live-computed values as the "base" would
+      // confuse the user, who reads the workbook as truth.
+      //
+      // For SCENARIO: only diverge from the workbook when the live demand
+      // model says scenario differs from base (e.g. sales-factor moved, prod
+      // override added, lot edited). When scen == base, scenRunout falls
+      // back to the workbook so no spurious "NEW RISK" appears.
+      const baseRunout = (isOnHold || forceAtRisk) ? effExp : (lot.runout || lot.expiry);
+      // Did the live demand model diverge between base and scenario?
+      const scenDivergesFromBase = baseLot && scenLot
+        && baseLot.scenRunout !== scenLot.scenRunout;
+      const scenRunout = (isOnHold || forceAtRisk) ? effExp
+        : (scenDivergesFromBase ? (scenLot?.scenRunout || lot.expiry)
+                                : (lot.runout || lot.expiry));
       const effectiveStart = (isOnHold || forceAtRisk) ? null : (scenLot?.effectiveStart || baseLot?.effectiveStart || null);
       const consumeStart   = (isOnHold || forceAtRisk) ? null : (scenLot?.consumeStart   || baseLot?.consumeStart   || null);
       // Production gap (from scenario chain — base will usually match)
@@ -4016,18 +4030,17 @@ function updateExpiryTab(product, baseRows, scenRows) {
       const gapEnd   = scenLot?.gapEnd   || null;
       const gapQty   = scenLot?.gapQty   || 0;
 
-      // Risk qty = portion of THIS lot's avail unconsumed at the short-date
-      // cutoff. Uses pass-1's chain semantics directly:
-      //   risk = clamp(0, lot.avail, lotCum − cumDemandAt(effExp))
-      // where lotCum = cumulative supply through THIS lot. When cumDemand at
-      // effExp ≥ lotCum, lot is fully consumed → risk 0. This matches the
-      // workbook's "runout vs short-date" comparison exactly when scen == base.
+      // Risk: trust the workbook for the BASE flag/qty. For SCEN, use
+      // workbook unless the scenario actually diverges; then use computed
+      // (clamp lot.avail − cumDemandAt(effExp) against lotCum).
       const bRisk = new Date(baseRunout) > new Date(effExp);
       const sRisk = new Date(scenRunout) > new Date(effExp);
-      const baseRisk = (isOnHold || forceAtRisk) ? lot.avail
-        : (baseLot ? Math.min(lot.avail, Math.max(0, (baseLot.lotCum || 0) - fefoBaseChained.cumDemandAt(effExp))) : 0);
+      const baseRisk = (isOnHold || forceAtRisk) ? lot.avail : (lot.risk || 0);
+      const scenRiskComputed = (scenLot && fefoScen.cumDemandAt)
+        ? Math.min(lot.avail, Math.max(0, (scenLot.lotCum || 0) - fefoScen.cumDemandAt(effExp)))
+        : 0;
       const scenRisk = (isOnHold || forceAtRisk) ? lot.avail
-        : (scenLot ? Math.min(lot.avail, Math.max(0, (scenLot.lotCum || 0) - fefoScen.cumDemandAt(effExp))) : 0);
+        : (scenDivergesFromBase ? scenRiskComputed : (lot.risk || 0));
       // Δ tied to qty (not just boolean) so cosmetic month-boundary differences
       // when scen==base don't trip "NEW RISK qty 0".
       let statusDelta = '—';
