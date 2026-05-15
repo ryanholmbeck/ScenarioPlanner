@@ -573,9 +573,14 @@
             oninput="runScenario()">
         </div>
         <div>
-          <label>Batch Size (units/kg)</label>
+          <label style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+            <span>Batch Size (units/kg)</span>
+            <span id="param-batch-size-badge" style="display:none;font-size:9px;font-weight:700;background:#dc2626;color:#fff;border-radius:3px;padding:1px 5px;cursor:pointer;" title="This value is overriding every supplier's batch_size across all products and months. Click to clear."
+                  onclick="document.getElementById('param-batch-size').value=''; this.style.display='none'; runScenario();">OVERRIDING REGISTRY ✕</span>
+          </label>
           <input type="number" id="param-batch-size" value="" min="0" step="1" placeholder="From registry"
-            oninput="runScenario()">
+            oninput="document.getElementById('param-batch-size-badge').style.display = (parseFloat(this.value)>0) ? 'inline-block' : 'none'; runScenario()">
+          <div style="font-size:9px;color:var(--muted);margin-top:2px;">Leave empty to use the active supplier's batch size per the registry timeline.</div>
         </div>
         <div>
           <label style="display:flex;justify-content:space-between;align-items:center">
@@ -5160,6 +5165,11 @@ function init() {
     sel.innerHTML = products.map(p => `<option value="${p}">${p}</option>`).join('');
     sel.value = '188mg LP';
   }
+  // Surface the param-batch-size override badge if the input arrives non-empty
+  // (e.g. browser autofill restoring a typed value across reloads).
+  const pbs = document.getElementById('param-batch-size');
+  const pbsBadge = document.getElementById('param-batch-size-badge');
+  if (pbs && pbsBadge && parseFloat(pbs.value) > 0) pbsBadge.style.display = 'inline-block';
   renderRegionToggles();  // also calls renderIndicationToggles()
   onProductChange();
   renderScenarioList();
