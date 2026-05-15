@@ -951,6 +951,10 @@ Month inventory becomes available after lead time">Release Month</th>
             <button onclick="addLotFromExpiryForm()" style="margin-top:14px;font-size:11px;padding:5px 12px;cursor:pointer;background:var(--navy);color:#fff;border:none;border-radius:3px;font-weight:600;">Add</button>
           </div>
         </div>
+        <!-- Live scenario-state diagnostic — surfaces every input that perturbs
+             demand vs. workbook base, so the user can spot which one is causing
+             unexpected runouts/at-risk readings. Computed on every render. -->
+        <div id="expiry-scenario-state" style="margin-top:8px;padding:6px 10px;border:1px solid var(--border);border-radius:4px;background:rgba(26,43,94,0.03);font-size:11px;color:var(--muted);display:flex;flex-wrap:wrap;gap:14px;align-items:center;"></div>
         <div id="expiry-gantt-wrap" style="margin-top:10px;border:1px solid var(--border);border-radius:6px;background:#fff;padding:10px 8px 6px;overflow-x:auto;">
           <div id="expiry-gantt" style="min-width:760px;"></div>
         </div>
@@ -3873,6 +3877,50 @@ function updateExpiryTab(product, baseRows, scenRows) {
   // to avoid runout fallback to expiry).
   const fefoBaseChained = computeFefoScenario(product, baseRows);
   const fefoScen        = computeFefoScenario(product, scenRows);
+
+  // ── Live scenario-state diagnostic ──────────────────────────────────────
+  // Every input that perturbs scenRows away from baseRows shows here, so any
+  // unexpected at-risk reading on the Gantt/table has a discoverable cause.
+  const _stateEl = document.getElementById('expiry-scenario-state');
+  if (_stateEl) {
+    const sfVal       = parseInt(document.getElementById('sales-factor')?.value || 100);
+    const euCombineEl = document.getElementById('combine-eu-stock');
+    const euCombineOn = euCombineEl ? !!euCombineEl.checked : true;
+    const supMode     = (typeof supplyMode !== 'undefined') ? supplyMode : 'normal';
+    const lpCombine   = document.getElementById('combine-lp-dp')?.checked || false;
+    const pbsOv       = parseFloat(document.getElementById('param-batch-size')?.value);
+    const pbsActive   = pbsOv > 0;
+    const customs     = (typeof customStreams === 'object' && customStreams)
+                         ? Object.keys(customStreams).length : 0;
+    const prodOvCount = Object.keys(prodOverrides[product] || {}).length;
+    const lotOvCount  = Object.keys(lotOverrides[product]  || {}).length;
+    const supOvCount  = Object.keys(supplierOverrides[product] || {}).length;
+    const regions     = (typeof getActiveRegions === 'function') ? getActiveRegions() : null;
+    const indications = (typeof getActiveIndications === 'function') ? getActiveIndications() : null;
+    // Tally cumDemand difference between base and scen — surfaces hidden drift
+    let demandDelta = 0;
+    if (Array.isArray(baseRows) && Array.isArray(scenRows)) {
+      const n = Math.min(baseRows.length, scenRows.length);
+      for (let i = 0; i < n; i++) demandDelta += ((scenRows[i]?.demand||0) - (baseRows[i]?.demand||0));
+    }
+    const chip = (label, val, neutral) => `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="font-weight:600;color:var(--navy);">${label}:</span> <span style="color:${neutral?'var(--muted)':'var(--navy)'};font-weight:${neutral?'400':'700'};">${val}</span></span>`;
+    const flag = (cond, label) => cond ? `<span style="display:inline-flex;align-items:center;gap:4px;color:#d97706;font-weight:700;">⚠ ${label}</span>` : '';
+    _stateEl.innerHTML = [
+      chip('Spotlight', product, true),
+      chip('Sales Factor', sfVal + '%', sfVal === 100),
+      chip('EU combine', euCombineOn ? 'ON' : 'OFF (separated)', euCombineOn),
+      chip('LP+DP combine', lpCombine ? 'ON' : 'OFF', !lpCombine),
+      chip('Supply mode', supMode, supMode === 'normal'),
+      chip('Regions', regions === null ? 'All' : regions.join(','), regions === null),
+      chip('Indications', indications === null ? 'All' : (indications.length + ' selected'), indications === null),
+      chip('Custom streams', customs, customs === 0),
+      chip('Lot overrides', lotOvCount, lotOvCount === 0),
+      chip('Prod overrides', prodOvCount, prodOvCount === 0),
+      chip('Supplier overrides', supOvCount, supOvCount === 0),
+      pbsActive ? flag(true, 'Batch-size override active (' + pbsOv + ')') : '',
+      chip('scen − base cum-demand', (demandDelta >= 0 ? '+' : '') + Math.round(demandDelta).toLocaleString(), Math.abs(demandDelta) < 1),
+    ].filter(Boolean).join('');
+  }
 
   if (!fefoBase.length) {
     // Diagnose: is the workbook's seed empty for this product, or has the
