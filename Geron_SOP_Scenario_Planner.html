@@ -4569,7 +4569,8 @@ function renderSupplierPanel() {
             <span>primary</span>
           </label>
         </div>
-        <div style="display:grid;grid-template-columns:auto 58px auto 36px auto 1fr;gap:3px 5px;align-items:center;margin-top:4px;font-size:10px;color:var(--muted);min-width:0;">
+        <!-- Row 1: batch + LT (numeric, share the row) -->
+        <div style="display:grid;grid-template-columns:auto 1fr auto 1fr;gap:3px 5px;align-items:center;margin-top:4px;font-size:10px;color:var(--muted);min-width:0;">
           <span>batch</span>
           <input type="number" min="0" step="1" value="${eff.batch_size ?? ''}"
             style="width:100%;font-size:11px;padding:2px 4px;min-width:0;"
@@ -4580,9 +4581,13 @@ function renderSupplierPanel() {
             style="width:100%;font-size:11px;padding:2px 4px;min-width:0;"
             title="Lead time in months — order today, receive in N months."
             onchange="setSupplierOverride('${safe(product)}','${safe(r.supplier)}',{lead_time: parseFloat(this.value)||0}); renderSupplierPanel(); runScenario();">
+        </div>
+        <!-- Row 2: active-from gets its own full-width row so the native
+             MMM YYYY display + chevron always fit, regardless of sidebar width -->
+        <div style="display:flex;gap:5px;align-items:center;margin-top:3px;font-size:10px;color:var(--muted);min-width:0;">
           <span>from</span>
           <input type="month" value="${fromMonth}"
-            style="width:100%;font-size:11px;padding:2px 4px;min-width:0;"
+            style="flex:1;font-size:11px;padding:2px 4px;min-width:0;"
             title="Active-from month — supplier becomes eligible from this month forward."
             onchange="setSupplierOverride('${safe(product)}','${safe(r.supplier)}',{active_from: this.value ? this.value + '-01' : null}); renderSupplierPanel(); runScenario();">
         </div>
