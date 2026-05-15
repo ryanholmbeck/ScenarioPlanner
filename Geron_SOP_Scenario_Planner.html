@@ -4273,7 +4273,7 @@ function renderExpiryGantt(product, lots, opts) {
 
     const barTooltip = l.isOnHold
       ? `On Hold — not consumed; see Release By in the table`
-      : `Consume ${cStart.slice(0,7)} → ${(dynRisk?riskCutoff:runout).slice(0,7)}\n${fmt(safeQty,0)} units consumed before short-date cutoff${dynRisk ? `\n${fmt(riskQty,0)} units at scrap risk (cutoff → expiry)` : ''}\nTotal lot qty: ${fmt(l.avail,0)}`;
+      : `Consume ${visualStart.slice(0,7)} → ${(dynRisk?riskCutoff:runout).slice(0,7)}\n${fmt(safeQty,0)} units consumed before short-date cutoff${dynRisk ? `\n${fmt(riskQty,0)} units at scrap risk (cutoff → expiry)` : ''}\nTotal lot qty: ${fmt(l.avail,0)}`;
 
     return `
       <div style="display:flex;align-items:center;height:${ROW_H}px;background:${stripeBg};border-bottom:1px solid rgba(26,43,94,0.06);">
