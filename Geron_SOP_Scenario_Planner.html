@@ -1983,6 +1983,20 @@ function getProdOverride(product, month) {
   return (prodOverrides[product] && prodOverrides[product][month] !== undefined)
     ? prodOverrides[product][month] : null;
 }
+// Shared resolver: effective production qty for product/month, taking the
+// override layer into account. `committed` is the baseline (PROD_DATA) units.
+// `batchSize` converts an override (stored as batch count) back to units.
+function getEffectiveProd(product, monthIso, batchSize, committed) {
+  const raw = prodOverrides[product] ? prodOverrides[product][monthIso] : undefined;
+  if (raw === undefined) return { units: committed || 0, fromOverride: false, cancelled: false };
+  const units = raw * (batchSize || 1);
+  return { units, fromOverride: true, cancelled: raw === 0 };
+}
+// True iff this month's production was explicitly cancelled (override set to 0)
+// — distinct from "no production scheduled" (no override, baseline = 0).
+function isProdCancelled(product, monthIso) {
+  return prodOverrides[product] && prodOverrides[product][monthIso] === 0;
+}
 
 function setProdOverride(product, month, batches) {
   if (!prodOverrides[product]) prodOverrides[product] = {};
@@ -2288,23 +2302,18 @@ function runMRP(baseRows, salesFactor, meta, horizonMonths, product) {
 
     // ── GATES (scenario-only) ──────────────────────────────────────────────
     let scenProd = batchQty;
+    const eff    = product ? getEffectiveProd(product, monthIso, batchSize, 0) : { units: 0, fromOverride: false, cancelled: false };
 
-    // Runout mode: no MRP at all; only manual overrides
     if (runoutMode) {
-      const ov = (product && prodOverrides[product])
-        ? prodOverrides[product][monthIso] : undefined;
-      scenProd = (ov !== undefined) ? ov * (batchSize || 1) : 0;
+      // Runout mode: no MRP at all; only manual overrides
+      scenProd = eff.fromOverride ? eff.units : 0;
     } else {
       // Suppress post-binding: zero out MRP-suggested production once past binding
-      if (suppressPostBinding && bindingThrough && monthIso >= bindingThrough) {
-        const ov = (product && prodOverrides[product])
-          ? prodOverrides[product][monthIso] : undefined;
-        if (ov === undefined) scenProd = 0;
+      if (suppressPostBinding && bindingThrough && monthIso >= bindingThrough && !eff.fromOverride) {
+        scenProd = 0;
       }
-      // Manual production override (units = count × active batch size)
-      const ov = (product && prodOverrides[product])
-        ? prodOverrides[product][monthIso] : undefined;
-      if (ov !== undefined) scenProd = ov * (batchSize || 1);
+      // Manual production override (units = count × active batch size) wins
+      if (eff.fromOverride) scenProd = eff.units;
     }
 
     // Binding period: production is whatever PROD_DATA / base scheduled. We
@@ -2334,6 +2343,8 @@ function runMRP(baseRows, salesFactor, meta, horizonMonths, product) {
       batches:    batchSize > 0 ? Math.round(scenProd / batchSize) : 0,
       supplier:   params.supplier,
       leadTime:   leadTime,
+      cancelled:  eff.cancelled,           // true iff prodOverride=0 explicitly
+      committed:  base.prod || 0,          // what PROD_DATA said (for delta display)
     });
   }
   return result;
@@ -3368,10 +3379,13 @@ function updateProductionTab(product, baseRows, scenRows, meta) {
     const compCell = compProd !== null
       ? `<td style="color:var(--muted);font-style:italic;">${compProd > 0 ? fmt(compProd) : '—'}</td>`
       : `<td style="display:none;"></td>`;
+    const cancelBadge = s.cancelled
+      ? ' <span style="font-size:9px;font-weight:700;background:#dc2626;color:#fff;border-radius:3px;padding:1px 5px;">CANCELLED</span>'
+      : '';
     tbody.innerHTML += `<tr>
       <td>${monthLabel(b.month)}</td>
       <td>${fmt(Math.round(b.prod/bSize))}</td><td>${fmt(b.prod)}</td>
-      <td>${fmt(Math.round(s.prod/bSize))}</td><td>${fmt(s.prod)}</td>
+      <td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmt(Math.round(s.prod/bSize))}</td><td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmt(s.prod)}${cancelBadge}</td>
       ${compCell}
       <td class="${dB>0?'diff-pos':dB<0?'diff-neg':'diff-neu'}">${dB>0?'+':''}${dB}</td>
       <td class="${dU>0?'diff-pos':dU<0?'diff-neg':'diff-neu'}">${dU>0?'+':''}${fmt(dU)}</td>
@@ -6373,19 +6387,17 @@ function runCombinedPoolTab() {
     const lpCommitted = lpBase[i]?.prod || 0;
     const dpCommitted = dpBase[i]?.prod || 0;
 
-    // Manual overrides
-    const lpOv = (prodOverrides[lpProd] || {})[month];
-    const dpOv = (prodOverrides[dpProd] || {})[month];
-    const lpOvProd = lpOv !== undefined ? lpOv * (lpMeta.batch_size || 1) : null;
-    const dpOvProd = dpOv !== undefined ? dpOv * dpBatch : null;
-
-    let lpProdAmt = (lpOv !== undefined) ? lpOvProd : lpCommitted;
-    let dpProdAmt = (dpOv !== undefined) ? dpOvProd : dpCommitted;
+    // Effective production = override-aware. Shared with runMRP so a Cancel
+    // on the Production tab flows here too (and vice versa).
+    const lpEff = getEffectiveProd(lpProd, month, lpMeta.batch_size || 1, lpCommitted);
+    const dpEff = getEffectiveProd(dpProd, month, dpBatch,                 dpCommitted);
+    let lpProdAmt = lpEff.units;
+    let dpProdAmt = dpEff.units;
 
     // ── SAWTOOTH MRP: schedule additional DP batches if pool short ─────
     // Project EI after demand and committed production
     let mrpAddedDP = 0;
-    if (avgFuture > 0 && dpBatch > 0 && dpOv === undefined) {
+    if (avgFuture > 0 && dpBatch > 0 && !dpEff.fromOverride) {
       const projectedEI_committed = poolBI - demand + lpProdAmt + dpProdAmt;
       const targetEI    = tgtMOH       * avgFuture;
       const overstockEI = overstockMOH * avgFuture;
@@ -6427,7 +6439,10 @@ function runCombinedPoolTab() {
       supplier:  dpSupParams.supplier,
       batchSize: dpBatch,
       mrpAdded:  Math.round(mrpAddedDP),
+      lpCommitted: Math.round(lpCommitted),
       dpCommitted: Math.round(dpCommitted),
+      lpCancelled: lpEff.cancelled,
+      dpCancelled: dpEff.cancelled,
     });
     poolBI = poolEI;
   }
@@ -6516,14 +6531,22 @@ function runCombinedPoolTab() {
   // ── Detail table ──────────────────────────────────────────────────────
   const tbody = document.getElementById('cpool-tbl-body');
   tbody.innerHTML = '';
+  const cancelBadge = `<span style="font-size:9px;font-weight:700;background:#dc2626;color:#fff;border-radius:3px;padding:1px 5px;margin-left:4px;">CANCELLED</span>`;
+  const mrpBadge    = `<span style="font-size:9px;font-weight:700;background:#0891b2;color:#fff;border-radius:3px;padding:1px 5px;margin-left:4px;" title="DP batches added by MRP because the pool projects below target MOH">+MRP</span>`;
   viewRows.forEach(r => {
     const rCls = `risk-${r.risk}`;
+    const lpCell = r.lpCancelled
+      ? `<td style="color:#dc2626;font-weight:600;">${fmt(r.lpCommitted)}${cancelBadge}</td>`
+      : `<td style="color:var(--muted);">${r.lpProd > 0 ? fmt(r.lpProd) : '—'}</td>`;
+    const dpCell = r.dpCancelled
+      ? `<td style="color:#dc2626;font-weight:600;">${fmt(r.dpCommitted)}${cancelBadge}</td>`
+      : `<td style="color:var(--cyan);font-weight:600;">${r.dpProd > 0 ? fmt(r.dpProd) : '—'}${r.mrpAdded > 0 ? mrpBadge : ''}</td>`;
     tbody.innerHTML += `<tr>
       <td>${monthLabel(r.month)}</td>
       <td>${fmt(r.bi)}</td>
       <td>${fmt(r.demand)}</td>
-      <td style="color:var(--muted);">${r.lpProd > 0 ? fmt(r.lpProd) : '—'}</td>
-      <td style="color:var(--cyan);font-weight:600;">${r.dpProd > 0 ? fmt(r.dpProd) : '—'}</td>
+      ${lpCell}
+      ${dpCell}
       <td style="font-weight:600;">${fmt(r.ei)}</td>
       <td>${r.moh >= 900 ? '∞' : r.moh.toFixed(1)}</td>
       <td class="${rCls}"><span class="status-pill status-${r.risk}">${r.risk}</span></td>
