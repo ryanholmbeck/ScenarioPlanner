@@ -484,7 +484,7 @@
       <div class="section-body">
         <label>Sales Factor: <span class="val-display" id="sales-factor-disp">100%</span></label>
         <input type="range" id="sales-factor" min="50" max="200" step="5" value="100"
-          oninput="document.getElementById('sales-factor-disp').textContent=this.value+'%'; runScenario()">
+          oninput="document.getElementById('sales-factor-disp').textContent=this.value+'%'; _syncCpoolSF(this.value); runScenario(); runCombinedPoolTab && runCombinedPoolTab();">
         <div class="info-box" style="margin-top:4px;">Applied uniformly to LP demand only. DS/RM cascade automatically.</div>
 
         <label style="margin-top:10px;display:block;font-weight:600;">Region Filter</label>
@@ -1091,7 +1091,7 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
           <div style="display:flex;flex-direction:column;gap:4px;min-width:140px;">
             <label style="font-size:11px;font-weight:600;color:var(--muted);">Sales Factor: <span id="cpool-sf-disp">100%</span></label>
             <input type="range" id="cpool-sf" min="50" max="200" step="5" value="100"
-              oninput="document.getElementById('cpool-sf-disp').textContent=this.value+'%'; runCombinedPoolTab()"
+              oninput="document.getElementById('cpool-sf-disp').textContent=this.value+'%'; _syncMainSF(this.value); runScenario(); runCombinedPoolTab();"
               style="width:160px;">
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;min-width:120px;">
@@ -1949,7 +1949,16 @@ function addNewLot(product, fields) {
   _persistLotOverrides();
 }
 function clearLotOverrides(product) {
-  delete lotOverrides[product];
+  if (product) {
+    delete lotOverrides[product];
+  } else {
+    // No arg → clear everything (used by the Reset-all path on the empty state)
+    lotOverrides = {};
+  }
+  _persistLotOverrides();
+}
+function clearAllLotOverrides() {
+  lotOverrides = {};
   _persistLotOverrides();
 }
 // Layered, full flat lot list. Use this everywhere instead of raw FEFO_LOTS.
@@ -3810,10 +3819,28 @@ function updateExpiryTab(product, baseRows, scenRows) {
   const fefoScen        = computeFefoScenario(product, scenRows);
 
   if (!fefoBase.length) {
+    // Diagnose: is the workbook's seed empty for this product, or has the
+    // override layer hidden everything (e.g. stale _deleted flags from a
+    // prior session in localStorage)?
+    const rawCount = (typeof FEFO_LOTS !== 'undefined')
+      ? FEFO_LOTS.filter(l => l.product === product).length
+      : 0;
+    const ovHidden = rawCount > 0;  // workbook has rows but they're masked
+    const msg = ovHidden
+      ? `Workbook has ${rawCount} lot${rawCount===1?'':'s'} for ${product}, but your local overrides are hiding them all (likely <code>_deleted</code> entries from a prior session).`
+      : `No workbook lots seeded for ${product}.`;
+    const resetBtn = ovHidden
+      ? `<button onclick="if(confirm('Clear ALL lot overrides (every product) and reload from the workbook? Your inline edits, deletes, and added lots will be lost.')) { clearAllLotOverrides(); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario(); }"
+           style="margin-top:8px;font-size:11px;padding:5px 12px;background:var(--red);color:#fff;border:none;border-radius:3px;font-weight:700;cursor:pointer;">↺ Reset ALL lot overrides to workbook</button>`
+      : '';
     document.querySelector('#tbl-expiry tbody').innerHTML =
-      '<tr><td colspan="14" class="empty-state">No lot data for this product. Use "+ Add lot" above to seed one.</td></tr>';
+      `<tr><td colspan="14" class="empty-state" style="text-align:center;padding:24px;">
+         <div style="margin-bottom:8px;">${msg}</div>
+         <div style="font-size:11px;color:var(--muted);">Use "+ Add lot" above to seed a fresh one${ovHidden ? ', or wipe overrides:' : '.'}</div>
+         ${resetBtn}
+       </td></tr>`;
     const ghost = document.getElementById('expiry-gantt');
-    if (ghost) ghost.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted);font-style:italic;">No lots to render.</div>';
+    if (ghost) ghost.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-style:italic;">${ovHidden ? 'All lots hidden by local overrides — see the table below for a reset option.' : 'No lots to render.'}</div>`;
     return;
   }
 
@@ -6255,9 +6282,30 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeKpiDril
 // ══════════════════════════════════════════════════════════════════════════════
 //  COMBINED POOL TAB — Standalone LP + DP pooled inventory planning
 // ══════════════════════════════════════════════════════════════════════════════
+// ── Two-way sync between the main and cpool sales-factor sliders ───────────
+// Conceptually they're the same control. When either moves, mirror the value
+// + label on the other side; both the main scenario and the combined-pool
+// tab then read from a single shared truth.
+function _syncCpoolSF(v) {
+  const slider = document.getElementById('cpool-sf');
+  const disp   = document.getElementById('cpool-sf-disp');
+  if (slider && slider.value !== String(v)) slider.value = v;
+  if (disp)   disp.textContent = v + '%';
+}
+function _syncMainSF(v) {
+  const slider = document.getElementById('sales-factor');
+  const disp   = document.getElementById('sales-factor-disp');
+  if (slider && slider.value !== String(v)) slider.value = v;
+  if (disp)   disp.textContent = v + '%';
+}
+
 function runCombinedPoolTab() {
+  // Sync the cpool slider to the main one before reading — main is canonical.
+  const mainSF = document.getElementById('sales-factor')?.value;
+  if (mainSF !== undefined) _syncCpoolSF(mainSF);
+
   const pair     = document.getElementById('cpool-pair')?.value || '188';
-  const sf       = parseInt(document.getElementById('cpool-sf')?.value || 100) / 100;
+  const sf       = parseInt(document.getElementById('sales-factor')?.value || 100) / 100;
   const horizon  = Math.min(parseInt(document.getElementById('cpool-horizon')?.value || 36), 120);
   const tgtMOH   = parseFloat(document.getElementById('cpool-target-moh')?.value || 18);
   const critMOH  = parseFloat(document.getElementById('cpool-critical-moh')?.value || 16);
