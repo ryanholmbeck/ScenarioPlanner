@@ -2476,6 +2476,41 @@ function computeFefoScenario(product, scenRows) {
   }
   // Attach lookup as an array property — preserves [i] indexing for callers.
   result.cumDemandAt = cumDemandAt;
+
+  // ── Pass 2: DOM-aware chaining ────────────────────────────────────────────
+  // A lot can't ship before its date of manufacture. If FEFO demand reaches a
+  // lot before its DOM, demand goes unmet during the gap, and that lot's own
+  // consumption window slides right. The slide cascades to subsequent lots:
+  // each lot starts at max(prevLot's revised runout, this lot's DOM).
+  function findFirstMonthAtCum(target, fromMonth) {
+    for (const m of months) {
+      if (fromMonth && m < fromMonth) continue;
+      if ((cumDemand[m] || 0) >= target) return m;
+    }
+    return months[months.length - 1] || null;
+  }
+  let supplyCursor = months[0] || null;
+  for (const lot of result) {
+    // Effective start = max(natural FEFO start, supply cursor, DOM)
+    const naturalStart = lot.consumeStart;
+    let effStart = (naturalStart && naturalStart > supplyCursor) ? naturalStart : supplyCursor;
+    if (lot.dom && lot.dom > effStart) {
+      lot.gapStart = effStart;
+      lot.gapEnd   = lot.dom;
+      lot.gapQty   = Math.max(0, Math.round(cumDemandAt(lot.dom) - cumDemandAt(effStart)));
+      effStart     = lot.dom;
+    } else {
+      lot.gapStart = null;
+      lot.gapEnd   = null;
+      lot.gapQty   = 0;
+    }
+    lot.effectiveStart = effStart;
+    // Revised runout: when cumDemand reaches cumAtStart + lot.avail
+    const targetCum = cumDemandAt(effStart) + (lot.avail || 0);
+    lot.scenRunout  = findFirstMonthAtCum(targetCum, effStart) || lot.scenRunout;
+    supplyCursor    = lot.scenRunout;
+  }
+
   return result;
 }
 
@@ -3894,21 +3929,31 @@ function updateExpiryTab(product, baseRows, scenRows) {
 
       // On Hold: never consumed — demand doesn't run through it
       // forceAtRisk: inactive supply mode product — no demand at all
-      const baseRunout = (isOnHold || forceAtRisk) ? effExp : (baseLot?.scenRunout || lot.expiry);
-      const scenRunout = (isOnHold || forceAtRisk) ? effExp : (scenLot?.scenRunout || lot.expiry);
-      const consumeStart = (isOnHold || forceAtRisk) ? null : (scenLot?.consumeStart || baseLot?.consumeStart || null);
+      const baseRunout    = (isOnHold || forceAtRisk) ? effExp : (baseLot?.scenRunout || lot.expiry);
+      const scenRunout    = (isOnHold || forceAtRisk) ? effExp : (scenLot?.scenRunout || lot.expiry);
+      const effectiveStart = (isOnHold || forceAtRisk) ? null : (scenLot?.effectiveStart || baseLot?.effectiveStart || null);
+      const consumeStart   = (isOnHold || forceAtRisk) ? null : (scenLot?.consumeStart   || baseLot?.consumeStart   || null);
+      // Production gap (from scenario chain — base will usually match)
+      const gapStart = scenLot?.gapStart || null;
+      const gapEnd   = scenLot?.gapEnd   || null;
+      const gapQty   = scenLot?.gapQty   || 0;
 
-      // Both base + scenario risk compared against the same threshold (effExp)
-      // AND computed at that threshold (not at the lot's actual expiry). This
-      // is the key fix: with shortDateMo > 0, runout can fall past riskCutoff
-      // even when the lot fully consumes before actual expiry — so risk-qty
-      // must be measured at riskCutoff (= effExp), not at expiry.
+      // Risk qty = portion of THIS lot's avail unconsumed by the short-date
+      // cutoff. With DOM-aware chaining, consumption starts at effectiveStart
+      // (not at the prior lot's threshold), so the right formula is:
+      //   risk = lot.avail − (cumDemandAt(effExp) − cumDemandAt(effectiveStart))
+      // clamped to [0, lot.avail].
       const bRisk = new Date(baseRunout) > new Date(effExp);
       const sRisk = new Date(scenRunout) > new Date(effExp);
+      function _consumedThrough(fefo, start, until) {
+        if (!fefo || !start) return 0;
+        return Math.max(0, fefo.cumDemandAt(until) - fefo.cumDemandAt(start));
+      }
+      const baseStart = baseLot?.effectiveStart || null;
       const baseRisk = (isOnHold || forceAtRisk) ? lot.avail
-        : (baseLot ? Math.min(lot.avail, Math.max(0, baseLot.lotCum - fefoBaseChained.cumDemandAt(effExp))) : 0);
+        : Math.min(lot.avail, Math.max(0, lot.avail - _consumedThrough(fefoBaseChained, baseStart, effExp)));
       const scenRisk = (isOnHold || forceAtRisk) ? lot.avail
-        : (scenLot ? Math.min(lot.avail, Math.max(0, scenLot.lotCum - fefoScen.cumDemandAt(effExp))) : 0);
+        : Math.min(lot.avail, Math.max(0, lot.avail - _consumedThrough(fefoScen, effectiveStart, effExp)));
       // Δ tied to qty (not just boolean) so cosmetic month-boundary differences
       // when scen==base don't trip "NEW RISK qty 0".
       let statusDelta = '—';
@@ -3929,7 +3974,8 @@ function updateExpiryTab(product, baseRows, scenRows) {
       return { lot: lot.lot, product: lotProduct, expiry: lot.expiry, effExp,
                dom: lot.dom || null,
                lotStatus, isOnHold, forceAtRisk,
-               baseRunout, scenRunout, consumeStart, avail: lot.avail,
+               baseRunout, scenRunout, consumeStart, effectiveStart, avail: lot.avail,
+               gapStart, gapEnd, gapQty,
                baseRisk, scenRisk, bRisk, sRisk, statusDelta,
                monthlyDemand, releaseBy, releaseByInfo };
     });
@@ -4139,19 +4185,17 @@ function renderExpiryGantt(product, lots, opts) {
     const runout     = l.scenRunout || l.expiry;
     const expIso     = l.expiry;
     const riskCutoff = _addMonthsIso(expIso, -shortDateMo);
-    const cStart     = l.consumeStart || today;
-    // Clamp visual start to today so the bar represents the forward-looking
-    // consumption window the user actually plans against.
-    const consumeVisual = (cStart < today) ? today : cStart;
-    // DOM gate: a lot can't be sold before it's manufactured. If FEFO demand
-    // wants it before DOM, the blue bar begins at DOM and a yellow gap bar
-    // marks the unmet-supply window (consumeVisual → DOM). We match the
-    // table's gap criterion (dom > consumeStart) so the two views agree.
-    const dom        = l.dom || null;
-    const cStartRaw  = l.consumeStart || today;
-    const hasGap     = !!(dom && dom > cStartRaw);
-    const gapFrom    = hasGap ? (cStartRaw < today ? today : cStartRaw) : consumeVisual;
-    const visualStart = hasGap ? dom : consumeVisual;
+    // effectiveStart already accounts for DOM gates and prior-lot supply
+    // cascades (computed in computeFefoScenario pass 2). The blue bar runs
+    // effectiveStart → revised runout. Gap fields, when set, mark the unmet-
+    // supply window between when FEFO demand reached this lot and DOM. We
+    // clamp both to today so the visual focuses on forward-looking exposure.
+    const rawStart    = l.effectiveStart || l.consumeStart || today;
+    const visualStart = (rawStart < today) ? today : rawStart;
+    const hasGap      = !!(l.gapStart && l.gapEnd && l.gapEnd > l.gapStart && l.gapEnd > today);
+    const gapFrom     = hasGap ? (l.gapStart < today ? today : l.gapStart) : null;
+    const gapTo       = hasGap ? l.gapEnd : null;
+    const gapQty      = hasGap ? (l.gapQty || 0) : 0;
     const dynRisk     = new Date(runout) > new Date(riskCutoff);
 
     // Quantity split: portion consumed by riskCutoff vs portion at scrap risk
@@ -4196,8 +4240,9 @@ function renderExpiryGantt(product, lots, opts) {
           <span style="font-family:monospace;">${l.lot}</span>${statusBadge}
         </div>
         <div style="flex:1;position:relative;height:14px;">
-          ${hasGap ? `<div title="Production gap: FEFO demand wants this lot starting ${gapFrom.slice(0,7)} but DOM is ${dom.slice(0,7)} — ${Math.round((new Date(dom) - new Date(gapFrom)) / (1000*60*60*24*30.44))} mo of unmet supply.&#10;Fill from another lot or pull production forward."
-               style="position:absolute;left:${pct(gapFrom)}%;width:${Math.max(0.3, pct(dom) - pct(gapFrom))}%;height:100%;background:repeating-linear-gradient(45deg,#facc15,#facc15 4px,#fde68a 4px,#fde68a 8px);border:1px solid #ca8a04;border-radius:2px;opacity:0.95;z-index:1;"></div>` : ''}
+          ${hasGap ? `<div title="Production gap ${gapFrom.slice(0,7)} → ${gapTo.slice(0,7)} (${Math.round((new Date(gapTo) - new Date(gapFrom)) / (1000*60*60*24*30.44))} mo)&#10;${fmt(gapQty,0)} units of demand have no supply during this window.&#10;Fill from another lot or pull production forward."
+               style="position:absolute;left:${pct(gapFrom)}%;width:${Math.max(0.3, pct(gapTo) - pct(gapFrom))}%;height:100%;background:repeating-linear-gradient(45deg,#facc15,#facc15 4px,#fde68a 4px,#fde68a 8px);border:1px solid #ca8a04;border-radius:2px;opacity:0.95;z-index:1;"></div>
+          <div style="position:absolute;left:${pct(gapFrom)}%;width:${Math.max(0.3, pct(gapTo) - pct(gapFrom))}%;top:0;height:100%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#7c2d12;z-index:6;pointer-events:none;white-space:nowrap;overflow:hidden;">${fmt(gapQty,0)} short</div>` : ''}
           <div title="${barTooltip}"
                style="position:absolute;left:${blueLeft}%;width:${blueW}%;height:100%;background:${blueColor};border-radius:2px;opacity:${blueOpacity};z-index:2${blueExtra};"></div>
           ${dynRisk && pinkW>0 ? `<div title="Scrap-risk window ${riskCutoff.slice(0,7)} → ${runout.slice(0,7)} · ${fmt(riskQty,0)} units"
