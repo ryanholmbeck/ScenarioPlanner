@@ -4620,7 +4620,8 @@ function renderDepPanel() {
   pairs.sort((a,b) => tier(a) - tier(b) || a.localeCompare(b));
 
   const hasOverride = Object.keys(depOverrides).length > 0;
-  document.getElementById('dep-override-badge').style.display = hasOverride ? 'inline' : 'none';
+  const badge = document.getElementById('dep-override-badge');
+  if (badge) badge.style.display = hasOverride ? 'inline' : 'none';
 
   const safe = s => String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;');
   const fmtFactor = f => {
@@ -6447,6 +6448,7 @@ function _mdSnapshot(name, val) {
 }
 function _mdCaptureBaselines() {
   _mdSnapshot('PROD_DATA',         typeof PROD_DATA         !== 'undefined' ? PROD_DATA         : null);
+  _mdSnapshot('PROD_INPUTS',       typeof PROD_INPUTS       !== 'undefined' ? PROD_INPUTS       : null);
   _mdSnapshot('DEMAND_BY_STREAM',  typeof DEMAND_BY_STREAM  !== 'undefined' ? DEMAND_BY_STREAM  : null);
   _mdSnapshot('RAW',               typeof RAW               !== 'undefined' ? RAW               : null);
   _mdSnapshot('COST_DATA',         typeof COST_DATA         !== 'undefined' ? COST_DATA         : null);
@@ -6648,29 +6650,92 @@ function mdRenderLots(host) {
 }
 
 function mdRenderProd(host) {
-  const products = (typeof PROD_DATA !== 'undefined' && Array.isArray(PROD_DATA))
-    ? Array.from(new Set(PROD_DATA.map(r=>r.product))).sort() : [];
-  const select = `
-    <label style="font-size:11px;font-weight:600;">Filter product:
-      <select id="md-prod-filter" onchange="mdRenderProd(document.getElementById('md-body'))" style="font-size:11px;padding:2px 5px;">
-        <option value="">All</option>
-        ${products.map(p=>`<option ${(window._mdProdFilter===p)?'selected':''}>${p}</option>`).join('')}
-      </select>
-    </label>`;
-  setTimeout(()=>{
-    const el = document.getElementById('md-prod-filter');
-    if (el) el.addEventListener('change', e => { window._mdProdFilter = e.target.value; });
-  }, 0);
-  const filt = window._mdProdFilter || '';
-  const rows = (PROD_DATA||[]).filter(r => !filt || r.product === filt);
+  // Mirror the workbook's "Production Inputs" sheet exactly: each row is one
+  // product/supplier pairing, columns are months, cell = scheduled qty.
+  // Inline-editable — changes propagate through runScenario to runMRP and
+  // every dependent view.
+  const inputs = (typeof PROD_INPUTS !== 'undefined' && Array.isArray(PROD_INPUTS)) ? PROD_INPUTS : [];
+  if (!inputs.length) {
+    host.innerHTML = '<p class="md-hint">No <code>PROD_INPUTS</code> data loaded. Run <code>refresh_dashboard.py</code> against the workbook to populate.</p>';
+    return;
+  }
+  // Union of months across products, sorted
+  const monthSet = new Set();
+  inputs.forEach(p => (p.months||[]).forEach(m => monthSet.add(m.month)));
+  const months = Array.from(monthSet).sort();
+  const fmtMo = m => {
+    const d = new Date(m);
+    return d.toLocaleString('en-US', { month: 'short', year: '2-digit' });
+  };
+  const safe = s => String(s).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+  // Column total by month
+  const monthTotals = {};
+  months.forEach(m => monthTotals[m] = 0);
+  inputs.forEach(p => (p.months||[]).forEach(m => { if (monthTotals[m.month] !== undefined) monthTotals[m.month] += (m.qty || 0); }));
+
   host.innerHTML = `
-    <p class="md-hint">Monthly production schedule rows from the workbook's "Planning Engine" sheet — bi (beginning inventory), demand, prod (planned production), ei (ending inventory), MOH, risk, supplier. ${rows.length.toLocaleString()} rows. Edit production via the <b>Production tab's override widget</b>; bulk imports replace the entire dataset.</p>
-    <div style="margin-bottom:8px;">${select}</div>
-    <table>
-      <thead><tr><th>Month</th><th>Product</th><th>Category</th><th>Unit</th><th>BI</th><th>Demand</th><th>Prod</th><th>EI</th><th>MOH</th><th>Risk</th><th>Supplier</th></tr></thead>
-      <tbody>${rows.slice(0, 600).map(r=>`<tr><td>${(r.month||'').slice(0,7)}</td><td>${r.product}</td><td style="font-size:10px;color:var(--muted)">${r.category||''}</td><td style="font-size:10px;color:var(--muted)">${r.unit||''}</td><td style="text-align:right;font-family:monospace">${typeof fmt==='function'?fmt(r.bi,0):r.bi}</td><td style="text-align:right;font-family:monospace">${typeof fmt==='function'?fmt(r.demand,0):r.demand}</td><td style="text-align:right;font-family:monospace">${typeof fmt==='function'?fmt(r.prod,0):r.prod}</td><td style="text-align:right;font-family:monospace">${typeof fmt==='function'?fmt(r.ei,0):r.ei}</td><td style="text-align:right;font-family:monospace">${(r.moh||0).toFixed?(r.moh||0).toFixed(1):r.moh}</td><td>${r.risk||''}</td><td style="font-size:10px;color:var(--muted)">${r.supplier||''}</td></tr>`).join('')}</tbody>
-    </table>
-    ${rows.length > 600 ? `<div style="font-size:10px;color:var(--muted);margin-top:6px;font-style:italic;">First 600 of ${rows.length} rows shown — CSV export contains all.</div>` : ''}`;
+    <p class="md-hint">Mirrors the workbook's <b>Production Inputs</b> sheet. Each cell is the scheduled production qty for that product/supplier in that month. Amber-tinted cells fall within each product's binding period (contractually committed). Edit any cell inline — changes flow into <code>runMRP</code> and every dependent view (Production, Inventory, Combined Pool, Budget).</p>
+    <div style="overflow:auto;max-height:62vh;border:1px solid var(--border);border-radius:4px;">
+      <table style="font-size:10px;border-collapse:separate;border-spacing:0;">
+        <thead>
+          <tr>
+            <th style="position:sticky;left:0;top:0;z-index:3;background:var(--navy);min-width:130px;">Product</th>
+            <th style="position:sticky;top:0;z-index:2;background:var(--navy);min-width:120px;">Supplier</th>
+            <th style="position:sticky;top:0;z-index:2;background:var(--navy);">Unit</th>
+            <th style="position:sticky;top:0;z-index:2;background:var(--navy);text-align:right;">Batch</th>
+            <th style="position:sticky;top:0;z-index:2;background:var(--navy);text-align:center;">Bind mo</th>
+            <th style="position:sticky;top:0;z-index:2;background:var(--navy);">Bind thru</th>
+            ${months.map(m=>`<th style="position:sticky;top:0;z-index:2;background:var(--navy);text-align:right;min-width:58px;">${fmtMo(m)}</th>`).join('')}
+            <th style="position:sticky;top:0;z-index:2;background:var(--gold);color:var(--navy);text-align:right;min-width:70px;">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${inputs.map((p, pi) => {
+            const map = {};
+            (p.months||[]).forEach(m => { map[m.month] = m.qty || 0; });
+            const total = Object.values(map).reduce((a,b)=>a+(b||0),0);
+            return `<tr>
+              <td style="position:sticky;left:0;background:#fff;font-weight:600;border-right:1px solid var(--border);">${p.product}</td>
+              <td>${p.supplier||''}</td>
+              <td style="font-size:10px;color:var(--muted)">${p.unit||''}</td>
+              <td style="text-align:right;font-family:monospace;">${p.batch_size||''}</td>
+              <td style="text-align:center;">${p.binding_mo||''}</td>
+              <td style="font-size:10px;color:var(--muted)">${(p.binding_through||'').slice(0,10)}</td>
+              ${months.map(m => {
+                const v = map[m] || 0;
+                const bound = p.binding_through && m < p.binding_through;
+                return `<td style="text-align:right;padding:1px 2px;${bound ? 'background:rgba(218,165,32,0.06);' : ''}">
+                  <input type="number" value="${v}" step="any" min="0"
+                    onchange="mdSetProdInputQty(${pi}, '${m}', parseFloat(this.value)||0)"
+                    style="width:50px;font-size:10px;padding:1px 2px;text-align:right;border:1px solid var(--border);background:transparent;font-family:monospace;${bound ? 'color:var(--navy);font-weight:600;' : ''}"
+                    title="${p.product} · ${m.slice(0,7)}${bound ? ' (binding period)' : ''}">
+                </td>`;
+              }).join('')}
+              <td style="text-align:right;font-family:monospace;font-weight:700;color:var(--navy);background:rgba(218,165,32,0.08);">${total.toLocaleString()}</td>
+            </tr>`;
+          }).join('')}
+          <tr style="position:sticky;bottom:0;background:#fff;border-top:2px solid var(--navy);font-weight:700;">
+            <td colspan="6" style="position:sticky;left:0;background:#fff;text-align:right;padding-right:8px;color:var(--navy);">Monthly total</td>
+            ${months.map(m => `<td style="text-align:right;font-family:monospace;color:var(--navy);">${monthTotals[m].toLocaleString()}</td>`).join('')}
+            <td style="text-align:right;font-family:monospace;background:var(--gold);color:var(--navy);">${Object.values(monthTotals).reduce((a,b)=>a+b,0).toLocaleString()}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// Inline-edit handler for the Production Inputs grid. Writes into the live
+// PROD_INPUTS structure and triggers a scenario re-run so downstream views
+// (Production tab, Inventory, Combined Pool, Budget) refresh immediately.
+function mdSetProdInputQty(productIdx, monthIso, qty) {
+  if (!Array.isArray(PROD_INPUTS) || !PROD_INPUTS[productIdx]) return;
+  const p = PROD_INPUTS[productIdx];
+  if (!Array.isArray(p.months)) p.months = [];
+  const existing = p.months.find(m => m.month === monthIso);
+  if (existing) existing.qty = qty;
+  else p.months.push({ month: monthIso, qty });
+  if (typeof runScenario === 'function') runScenario();
+  _mdUpdateStatus();
 }
 
 function mdRenderDemand(host) {
@@ -6690,23 +6755,62 @@ function mdRenderDemand(host) {
 }
 
 function mdRenderRaw(host) {
+  // Inline-editable. Each cell writes through mdSetRaw which triggers
+  // runScenario; Reset section restores the baseline snapshot.
   const products = (typeof RAW === 'object' && RAW) ? Object.keys(RAW).sort() : [];
+  const safe = s => String(s).replace(/'/g,"\\'").replace(/"/g,'&quot;');
   host.innerHTML = `
-    <p class="md-hint">Per-product metadata: category, unit, MOH targets, batch size, lead time, primary supplier. This is the fallback used when the supplier registry doesn't cover a product/month.</p>
+    <p class="md-hint">Per-product metadata — edit any cell inline. Drives MRP fallback when the supplier registry doesn't cover a product/month, and feeds chart tooltips. <b>Reset section</b> rolls every value back to the baseline snapshot captured when you opened this modal.</p>
     <table>
       <thead><tr><th>Product</th><th>Category</th><th>Unit</th><th>Target MOH</th><th>Critical MOH</th><th>Overstock</th><th>Batch size</th><th>Lead time</th><th>Supplier</th></tr></thead>
-      <tbody>${products.map(p=>{ const r = RAW[p]||{}; return `<tr><td><b>${p}</b></td><td>${r.category||''}</td><td>${r.unit||''}</td><td style="text-align:right">${r.target_moh||''}</td><td style="text-align:right">${r.critical_moh||''}</td><td style="text-align:right">${r.overstock_moh||''}</td><td style="text-align:right;font-family:monospace">${r.batch_size||''}</td><td style="text-align:right">${r.lead_time||''}</td><td style="font-size:10px;color:var(--muted)">${r.supplier||''}</td></tr>`; }).join('')}</tbody>
+      <tbody>${products.map(p=>{ const r = RAW[p]||{}; return `<tr>
+        <td><b>${p}</b></td>
+        <td><input type="text"   value="${safe(r.category||'')}"   onchange="mdSetRaw('${safe(p)}','category',this.value)" style="width:100px;"></td>
+        <td><input type="text"   value="${safe(r.unit||'')}"        onchange="mdSetRaw('${safe(p)}','unit',this.value)" style="width:55px;"></td>
+        <td><input type="number" step="any" min="0" value="${r.target_moh   ?? ''}" onchange="mdSetRaw('${safe(p)}','target_moh',   parseFloat(this.value)||0)" style="width:54px;text-align:right;"></td>
+        <td><input type="number" step="any" min="0" value="${r.critical_moh ?? ''}" onchange="mdSetRaw('${safe(p)}','critical_moh', parseFloat(this.value)||0)" style="width:54px;text-align:right;"></td>
+        <td><input type="number" step="any" min="0" value="${r.overstock_moh?? ''}" onchange="mdSetRaw('${safe(p)}','overstock_moh',parseFloat(this.value)||0)" style="width:54px;text-align:right;"></td>
+        <td><input type="number" step="any" min="0" value="${r.batch_size   ?? ''}" onchange="mdSetRaw('${safe(p)}','batch_size',   parseFloat(this.value)||0)" style="width:80px;text-align:right;font-family:monospace;"></td>
+        <td><input type="number" step="any" min="0" value="${r.lead_time    ?? ''}" onchange="mdSetRaw('${safe(p)}','lead_time',    parseFloat(this.value)||0)" style="width:54px;text-align:right;"></td>
+        <td><input type="text"   value="${safe(r.supplier||'')}"    onchange="mdSetRaw('${safe(p)}','supplier',this.value)" style="width:170px;"></td>
+      </tr>`; }).join('')}</tbody>
     </table>`;
+}
+
+function mdSetRaw(product, field, value) {
+  if (typeof RAW !== 'object' || !RAW) window.RAW = {};
+  if (!RAW[product]) RAW[product] = {};
+  RAW[product][field] = value;
+  if (typeof runScenario === 'function') runScenario();
+  _mdUpdateStatus();
 }
 
 function mdRenderCosts(host) {
   const products = (typeof COST_DATA === 'object' && COST_DATA && COST_DATA.products) ? Object.keys(COST_DATA.products).sort() : [];
+  const safe = s => String(s).replace(/'/g,"\\'").replace(/"/g,'&quot;');
   host.innerHTML = `
-    <p class="md-hint">Per-product cost data: inventory value per UoM, production cost per batch or per UoM, batch-vs-UoM costing flag. Drives the Inventory Valuation and Budget Impact tabs.</p>
+    <p class="md-hint">Per-product cost data — edit inline. Drives <b>Inventory Valuation</b> and <b>Budget Impact</b> tabs. "Cost by batch?" toggles between per-batch and per-UoM production cost models.</p>
     <table>
-      <thead><tr><th>Product</th><th>Inv value / UoM</th><th>Prod cost / batch</th><th>Prod cost / UoM</th><th>Cost by batch?</th><th>Unit</th><th>Supplier</th></tr></thead>
-      <tbody>${products.map(p=>{ const r = (COST_DATA.products||{})[p]||{}; return `<tr><td><b>${p}</b></td><td style="text-align:right;font-family:monospace">${r.inv_value_uom||''}</td><td style="text-align:right;font-family:monospace">${r.prod_cost_batch||''}</td><td style="text-align:right;font-family:monospace">${r.prod_cost_uom||''}</td><td style="text-align:center">${r.cost_by_batch?'✓':''}</td><td>${r.unit||''}</td><td style="font-size:10px;color:var(--muted)">${r.supplier||''}</td></tr>`; }).join('')}</tbody>
+      <thead><tr><th>Product</th><th>Inv value / UoM</th><th>Prod cost / batch</th><th>Prod cost / UoM</th><th>By batch?</th><th>Unit</th><th>Supplier</th></tr></thead>
+      <tbody>${products.map(p=>{ const r = (COST_DATA.products||{})[p]||{}; return `<tr>
+        <td><b>${p}</b></td>
+        <td><input type="number" step="any" min="0" value="${r.inv_value_uom   || 0}" onchange="mdSetCost('${safe(p)}','inv_value_uom',  parseFloat(this.value)||0)" style="width:100px;text-align:right;font-family:monospace;"></td>
+        <td><input type="number" step="any" min="0" value="${r.prod_cost_batch || 0}" onchange="mdSetCost('${safe(p)}','prod_cost_batch',parseFloat(this.value)||0)" style="width:120px;text-align:right;font-family:monospace;"></td>
+        <td><input type="number" step="any" min="0" value="${r.prod_cost_uom   || 0}" onchange="mdSetCost('${safe(p)}','prod_cost_uom',  parseFloat(this.value)||0)" style="width:100px;text-align:right;font-family:monospace;"></td>
+        <td style="text-align:center;"><input type="checkbox" ${r.cost_by_batch ? 'checked' : ''} onchange="mdSetCost('${safe(p)}','cost_by_batch', this.checked)"></td>
+        <td><input type="text" value="${safe(r.unit||'units')}" onchange="mdSetCost('${safe(p)}','unit', this.value)" style="width:60px;"></td>
+        <td><input type="text" value="${safe(r.supplier||'')}"  onchange="mdSetCost('${safe(p)}','supplier', this.value)" style="width:180px;"></td>
+      </tr>`; }).join('')}</tbody>
     </table>`;
+}
+
+function mdSetCost(product, field, value) {
+  if (typeof COST_DATA !== 'object' || !COST_DATA) window.COST_DATA = {};
+  if (!COST_DATA.products) COST_DATA.products = {};
+  if (!COST_DATA.products[product]) COST_DATA.products[product] = {};
+  COST_DATA.products[product][field] = value;
+  if (typeof runScenario === 'function') runScenario();
+  _mdUpdateStatus();
 }
 
 // ── CSV export per tab ──────────────────────────────────────────────────────
@@ -6754,12 +6858,23 @@ function mdDownloadCSV() {
       break;
     }
     case 'prod': {
-      const rows = (PROD_DATA||[]).map(r => ({
-        month:(r.month||'').slice(0,10), product:r.product, category:r.category||'', unit:r.unit||'',
-        bi:r.bi||0, demand:r.demand||0, prod:r.prod||0, ei:r.ei||0, moh:r.moh||0, risk:r.risk||'',
-        rm:(r.rm||'').slice(0,10), rq:r.rq||0, supplier:r.supplier||'',
-      }));
-      csv = _mdRowsToCsv(['month','product','category','unit','bi','demand','prod','ei','moh','risk','rm','rq','supplier'], rows);
+      // Long-format export of PROD_INPUTS (one row per product/supplier/month).
+      // Each product carries its supplier/unit/batch_size/binding_* metadata so
+      // round-tripping reconstructs the full structure on import.
+      const rows = [];
+      for (const p of (PROD_INPUTS||[])) {
+        for (const m of (p.months||[])) {
+          rows.push({
+            product: p.product, supplier: p.supplier || '', unit: p.unit || '',
+            batch_size: p.batch_size || '',
+            binding_mo: p.binding_mo || '',
+            binding_through: (p.binding_through||'').slice(0,10),
+            month: (m.month||'').slice(0,10),
+            qty: m.qty || 0,
+          });
+        }
+      }
+      csv = _mdRowsToCsv(['product','supplier','unit','batch_size','binding_mo','binding_through','month','qty'], rows);
       break;
     }
     case 'demand': {
@@ -6920,19 +7035,33 @@ function _mdApplyCsv(tab, rows) {
       break;
     }
     case 'prod': {
-      // Overwrite PROD_DATA wholesale from CSV.
-      window.PROD_DATA = rows.map(r => ({
-        month: _mdStr(r.month).slice(0,10),
-        ml: _mdStr(r.month).slice(0,7),
-        product: _mdStr(r.product),
-        category: _mdStr(r.category),
-        unit: _mdStr(r.unit),
-        bi: _mdNum(r.bi), demand: _mdNum(r.demand), prod: _mdNum(r.prod), ei: _mdNum(r.ei),
-        moh: _mdNum(r.moh), risk: _mdStr(r.risk),
-        rm: _mdStr(r.rm).slice(0,10) || _mdStr(r.month).slice(0,10),
-        rq: _mdNum(r.rq), supplier: _mdStr(r.supplier),
-      })).filter(r => r.month && r.product);
-      count = window.PROD_DATA.length;
+      // Reconstruct PROD_INPUTS from long-format CSV. Group by
+      // (product, supplier) — each group's metadata comes from any row in
+      // that group (consistent within a CSV by convention); months[] is
+      // assembled in chronological order.
+      const groups = {};
+      for (const r of rows) {
+        const product = _mdStr(r.product).trim();
+        if (!product) continue;
+        const supplier = _mdStr(r.supplier).trim();
+        const key = product + '||' + supplier;
+        if (!groups[key]) {
+          groups[key] = {
+            product, supplier,
+            unit: _mdStr(r.unit),
+            batch_size: _mdNum(r.batch_size),
+            binding_mo: _mdNum(r.binding_mo) || 9,
+            binding_through: _mdStr(r.binding_through).slice(0,10) || null,
+            months: [],
+          };
+        }
+        const month = _mdStr(r.month).slice(0,10);
+        if (month) groups[key].months.push({ month, qty: _mdNum(r.qty) });
+        count++;
+      }
+      // Sort each product's months chronologically
+      for (const k of Object.keys(groups)) groups[k].months.sort((a,b)=>a.month.localeCompare(b.month));
+      window.PROD_INPUTS = Object.values(groups);
       break;
     }
     case 'demand': {
@@ -7000,7 +7129,8 @@ function mdResetTab() {
                       if (mdBaselines.DEPENDENCIES_FULL) window.DEPENDENCIES_FULL = JSON.parse(JSON.stringify(mdBaselines.DEPENDENCIES_FULL));
                       break;
     case 'prod':      prodOverrides = {};
-                      if (mdBaselines.PROD_DATA) window.PROD_DATA = JSON.parse(JSON.stringify(mdBaselines.PROD_DATA));
+                      if (mdBaselines.PROD_INPUTS) window.PROD_INPUTS = JSON.parse(JSON.stringify(mdBaselines.PROD_INPUTS));
+                      if (mdBaselines.PROD_DATA)   window.PROD_DATA   = JSON.parse(JSON.stringify(mdBaselines.PROD_DATA));
                       break;
     case 'demand':    if (mdBaselines.DEMAND_BY_STREAM) window.DEMAND_BY_STREAM = JSON.parse(JSON.stringify(mdBaselines.DEMAND_BY_STREAM));    break;
     case 'raw':       if (mdBaselines.RAW) window.RAW = JSON.parse(JSON.stringify(mdBaselines.RAW));    break;
@@ -7017,6 +7147,7 @@ function mdResetAll() {
   prodOverrides = {};
   if (typeof clearAllDepOverrides === 'function') clearAllDepOverrides();
   if (mdBaselines.PROD_DATA)         window.PROD_DATA         = JSON.parse(JSON.stringify(mdBaselines.PROD_DATA));
+  if (mdBaselines.PROD_INPUTS)       window.PROD_INPUTS       = JSON.parse(JSON.stringify(mdBaselines.PROD_INPUTS));
   if (mdBaselines.DEMAND_BY_STREAM)  window.DEMAND_BY_STREAM  = JSON.parse(JSON.stringify(mdBaselines.DEMAND_BY_STREAM));
   if (mdBaselines.RAW)               window.RAW               = JSON.parse(JSON.stringify(mdBaselines.RAW));
   if (mdBaselines.COST_DATA)         window.COST_DATA         = JSON.parse(JSON.stringify(mdBaselines.COST_DATA));
