@@ -1152,7 +1152,11 @@ def inject_html(html_path, out_path, prod_data, raw_meta, cost_data,
 
     def replace_const(html, name, value_json, is_array=False):
         bracket = r'\[.*?\]' if is_array else r'\{.*?\}'
-        pattern = rf'(const {re.escape(name)}\s*=\s*){bracket}(;)'
+        # Match both `const NAME = ...` (Executive Dashboard convention) and
+        # `var NAME = ...` (Scenario Planner convention). The Planner declares
+        # its data constants with `var` for browser-global hoisting; the
+        # Dashboard uses `const`. Same JSON body in both cases.
+        pattern = rf'((?:const|var)\s+{re.escape(name)}\s*=\s*){bracket}(;)'
         # Use lambda so value_json is never treated as a regex replacement string
         # (avoids errors on \u, \n, \g etc. that appear in JSON)
         found = []
@@ -1161,7 +1165,7 @@ def inject_html(html_path, out_path, prod_data, raw_meta, cost_data,
             return m.group(1) + value_json + m.group(2)
         new_html = re.sub(pattern, _repl, html, flags=re.DOTALL)
         if not found:
-            print(f"  ⚠  Could not find 'const {name}' in HTML — skipping")
+            print(f"  ⚠  Could not find 'const|var {name}' in HTML — skipping")
         return new_html
 
     # Controls inventory = first-month BI per product
