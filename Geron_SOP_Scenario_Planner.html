@@ -419,26 +419,24 @@
       <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span> 
         📅 View Window <span>▼</span>
       </div>
-      <div class="section-body">
+      <div class="section-body" title="Controls all charts and tables. KPIs reflect the same window.">
         <label>Display months: <span class="val-display" id="view-months-disp">36</span></label>
         <input type="range" id="view-months" min="12" max="180" step="6" value="36"
           oninput="document.getElementById('view-months-disp').textContent=this.value; runScenario()">
-        <div class="info-box" style="margin-top:4px;">Controls all charts and tables. KPIs reflect same window.</div>
       </div>
     </div>
 
     <!-- AGGREGATION PERIOD -->
     <div class="section" draggable="true" data-section-id="aggregation">
-      <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span> 
+      <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span>
         📅 Aggregation Period <span>▼</span>
       </div>
-      <div class="section-body">
+      <div class="section-body" title="Applies to all chart views. Tables always show monthly detail.">
         <div class="toggle-group" style="width:100%">
           <button class="toggle-btn period-btn-monthly active" onclick="setBudgetPeriod('monthly')">Monthly</button>
           <button class="toggle-btn period-btn-quarterly" onclick="setBudgetPeriod('quarterly')">Quarterly</button>
           <button class="toggle-btn period-btn-annual" onclick="setBudgetPeriod('annual')">Annual</button>
         </div>
-        <div class="info-box" style="margin-top:4px;">Applies to all chart views. Tables always show monthly detail.</div>
       </div>
     </div>
 
@@ -463,16 +461,16 @@
           <option>APG</option>
           <option>APT</option>
         </select>
-        <label style="margin-top:8px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+        <label style="margin-top:8px;display:flex;align-items:center;gap:6px;cursor:pointer;"
+               title="Combines inventory for 188mg LP + 200mg DP (or 47mg + 50mg). MOH target becomes 18 mo and production is scheduled jointly against combined stock.">
           <input type="checkbox" id="combine-lp-dp" onchange="runScenario()" style="accent-color:var(--gold);">
           <span style="font-weight:600;">Combine LP + DP</span>
         </label>
-        <div class="info-box" style="margin-top:4px;">Combines inventory for 188mg LP + 200mg DP (or 47mg + 50mg). MOH target becomes 18 mo and production is scheduled jointly against combined stock.</div>
-        <label style="margin-top:8px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+        <label style="margin-top:8px;display:flex;align-items:center;gap:6px;cursor:pointer;"
+               title="When ON (default): 188mg LP + 188mg LP − EU Stock are pooled as one product (same for 47mg). When OFF: each runs separately so the Expiry Risk tab can compare isolated views.">
           <input type="checkbox" id="combine-eu-stock" checked onchange="runScenario()" style="accent-color:var(--gold);">
           <span style="font-weight:600;">Combine EU Stock with parent</span>
         </label>
-        <div class="info-box" style="margin-top:4px;">When ON (default): 188mg LP + 188mg LP - EU Stock are pooled as one product (same for 47mg). When OFF: each runs separately so the Expiry Risk tab can compare isolated views.</div>
       </div>
     </div>
 
@@ -482,18 +480,18 @@
         📈 Demand Scenario <span>▼</span>
       </div>
       <div class="section-body">
-        <label>Sales Factor: <span class="val-display" id="sales-factor-disp">100%</span></label>
+        <label title="Applied uniformly to LP demand only. DS/RM cascade automatically.">Sales Factor: <span class="val-display" id="sales-factor-disp">100%</span></label>
         <input type="range" id="sales-factor" min="50" max="200" step="5" value="100"
+          title="Scales scenario LP demand. 100% = workbook baseline. Affects every downstream view."
           oninput="document.getElementById('sales-factor-disp').textContent=this.value+'%'; _syncCpoolSF(this.value); runScenario(); runCombinedPoolTab && runCombinedPoolTab();">
-        <div class="info-box" style="margin-top:4px;">Applied uniformly to LP demand only. DS/RM cascade automatically.</div>
 
-        <label style="margin-top:10px;display:block;font-weight:600;">Region Filter</label>
+        <label style="margin-top:10px;display:block;font-weight:600;"
+               title="Uncheck a region to remove its demand from the scenario. All on = full combined demand.">Region Filter</label>
         <div id="region-toggles-container" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px;"></div>
-        <div class="info-box" style="margin-top:4px;">Uncheck to remove a region's demand from the scenario. All on = full demand.</div>
 
-        <label style="margin-top:10px;display:block;font-weight:600;">Indication Filter</label>
+        <label style="margin-top:10px;display:block;font-weight:600;"
+               title="Region AND indication must both be checked for a stream to contribute demand.">Indication Filter</label>
         <div id="indication-toggles-container" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px;"></div>
-        <div class="info-box" style="margin-top:4px;">Region AND Indication must both be checked to include a stream.</div>
 
         <label style="margin-top:8px;">Upload Custom Demand Template</label>
         <button onclick="downloadDemandTemplate()" style="width:100%;margin-bottom:6px;padding:7px;background:#005EB8;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;">📥 Download CSV Template</button>
@@ -598,25 +596,26 @@
           </div>
         </div>
         <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;"
+                 title="When ON, MRP will not auto-schedule production for any month beyond each product's binding period cutoff. Manual overrides still apply.">
             <input type="checkbox" id="suppress-post-binding" onchange="runScenario()" style="accent-color:var(--gold);">
             <span>Suppress Post-Binding MRP</span>
           </label>
-          <div class="info-box" style="margin-top:4px;">When ON, MRP will not auto-schedule production for any month beyond each product's binding period cutoff. Manual overrides still apply.</div>
         </div>
         <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;"
+                 title="When ON, disables all MRP batch scheduling. Shows straight inventory depletion — when current stock + already-scheduled production runs out against the demand scenario.">
             <input type="checkbox" id="runout-mode" onchange="runScenario()" style="accent-color:var(--red);">
             <span style="color:var(--red);">📉 Runout Mode</span>
           </label>
-          <div class="info-box" style="margin-top:4px;border-color:rgba(249,65,58,0.3);background:rgba(249,65,58,0.05);">When ON, disables all MRP batch scheduling. Shows straight inventory depletion — when current stock + already-scheduled production runs out against the demand scenario.</div>
         </div>
       </div>
     </div>
 
     <!-- SUPPLIERS -->
     <div class="section" draggable="true" data-section-id="suppliers">
-      <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span>
+      <div class="section-header" onclick="toggleSection(this)"
+           title="Toggle active/primary and edit batch size, lead time, or start month. Overrides layer on top of the workbook registry and are GLOBAL — they apply to single-product MRP, multi-tier cascade, and combined LP+DP pool views alike. The '● live' tag marks the supplier scheduling is currently using for today's month."><span class="drag-handle" title="Drag to reorder">⠿</span>
         🏭 Suppliers <span>▼</span>
       </div>
       <div class="section-body">
@@ -628,25 +627,15 @@
           </a>
           <span id="supplier-override-badge" style="font-size:10px;color:var(--gold);font-weight:600;display:none;">● overridden</span>
         </div>
-        <div class="info-box" style="margin-top:6px;">Toggle active/primary and edit batch size, lead time, or start month. Overrides layer on top of the workbook registry and are <b>global</b> — they apply to single-product MRP, multi-tier cascade, and combined LP+DP pool views alike. The "● live" tag marks the supplier scheduling is currently using for today's month.</div>
       </div>
     </div>
 
-    <!-- DEPENDENCY FACTORS -->
-    <div class="section" draggable="true" data-section-id="dep-editor">
-      <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span>
-        🔗 Dependency Factors <span>▼</span>
-      </div>
-      <div class="section-body">
-        <div id="dep-panel" style="font-size:11px;"></div>
-        <div style="margin-top:6px;display:flex;justify-content:space-between;align-items:center;">
-          <a href="javascript:void(0)" onclick="clearAllDepOverrides(); renderDepPanel(); runScenario();"
-             style="font-size:10px;color:var(--muted);text-decoration:underline;">
-            reset all to workbook
-          </a>
-          <span id="dep-override-badge" style="font-size:10px;color:var(--gold);font-weight:600;display:none;">● overridden</span>
-        </div>
-        <div class="info-box" style="margin-top:6px;">Multipliers that drive the cascade: parent units × factor = child units consumed. For multi-supplier pairs each row shows its supplier and (if any) active-window. Editing here feeds <b>deriveChildDemand</b> across LP→DP→DS→RM and the Raw Material Cascade tab.</div>
+    <!-- MASTER DATA — opens a modal with dependency factors (and room for more) -->
+    <div class="section" draggable="true" data-section-id="master-data">
+      <div class="section-header" onclick="openMasterDataModal()"
+           title="Open the master-data viewer: dependency factors, supplier registry overrides, and lot inventory in one place.">
+        <span class="drag-handle" title="Drag to reorder">⠿</span>
+        🗃️ Master Data <span style="font-size:11px;color:var(--muted);">▶ open</span>
       </div>
     </div>
 
@@ -4580,18 +4569,21 @@ function renderSupplierPanel() {
             <span>primary</span>
           </label>
         </div>
-        <div style="display:grid;grid-template-columns:auto 1fr auto 1fr auto 1fr;gap:3px 4px;align-items:center;margin-top:4px;font-size:10px;color:var(--muted);">
+        <div style="display:grid;grid-template-columns:auto 1fr auto 50px auto 1fr;gap:3px 5px;align-items:center;margin-top:4px;font-size:10px;color:var(--muted);">
           <span>batch</span>
           <input type="number" min="0" step="1" value="${eff.batch_size ?? ''}"
-            style="width:100%;font-size:10px;padding:1px 2px;"
+            style="width:100%;font-size:11px;padding:2px 4px;min-width:64px;"
+            title="Units/kg per batch from this supplier — overrides registry value when typed."
             onchange="setSupplierOverride('${safe(product)}','${safe(r.supplier)}',{batch_size: parseFloat(this.value)||0}); renderSupplierPanel(); runScenario();">
-          <span>lt</span>
+          <span>LT</span>
           <input type="number" min="0" step="1" value="${eff.lead_time ?? ''}"
-            style="width:100%;font-size:10px;padding:1px 2px;"
+            style="width:100%;font-size:11px;padding:2px 4px;"
+            title="Lead time in months — order today, receive in N months."
             onchange="setSupplierOverride('${safe(product)}','${safe(r.supplier)}',{lead_time: parseFloat(this.value)||0}); renderSupplierPanel(); runScenario();">
           <span>from</span>
           <input type="month" value="${fromMonth}"
-            style="width:100%;font-size:10px;padding:1px 2px;"
+            style="width:100%;font-size:11px;padding:2px 4px;min-width:90px;"
+            title="Active-from month — supplier becomes eligible from this month forward."
             onchange="setSupplierOverride('${safe(product)}','${safe(r.supplier)}',{active_from: this.value ? this.value + '-01' : null}); renderSupplierPanel(); runScenario();">
         </div>
       </div>`;
@@ -6426,6 +6418,32 @@ function closeKpiDrill() {
   document.getElementById('kpi-drill-overlay').classList.remove('open');
 }
 
+// ── Master Data modal — hosts the dependency-factor editor (and is sized to
+// host more master-data viewers later: supplier registry browser, lot
+// inventory inspector, etc.). renderDepPanel targets the same #dep-panel id
+// it always did — only the surrounding chrome moved from sidebar to modal.
+function openMasterDataModal() {
+  const ov = document.getElementById('master-data-overlay');
+  if (!ov) return;
+  ov.style.display = 'flex';
+  if (typeof renderDepPanel === 'function') renderDepPanel();
+}
+function closeMasterDataModal() {
+  const ov = document.getElementById('master-data-overlay');
+  if (ov) ov.style.display = 'none';
+}
+// Backdrop click closes
+document.getElementById('master-data-overlay')?.addEventListener('click', e => {
+  if (e.target === document.getElementById('master-data-overlay')) closeMasterDataModal();
+});
+// Esc closes
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const ov = document.getElementById('master-data-overlay');
+    if (ov && ov.style.display !== 'none') closeMasterDataModal();
+  }
+});
+
 // ── SIDEBAR RESIZE ────────────────────────────────────────────────────────
 (function() {
   const handle  = document.getElementById('sidebar-resize');
@@ -6732,6 +6750,29 @@ function runCombinedPoolTab() {
       <button id="kpi-drill-close" onclick="closeKpiDrill()" title="Close">✕</button>
     </div>
     <div id="kpi-drill-body"></div>
+  </div>
+</div>
+
+<!-- Master Data Modal — reuses the kpi-drill overlay/modal CSS for consistency -->
+<div id="master-data-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9000;align-items:center;justify-content:center;">
+  <div style="background:var(--card);border-radius:10px;width:min(960px,94vw);max-height:88vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.28);overflow:hidden;border-top:4px solid var(--gold);">
+    <div style="background:var(--navy);color:#fff;padding:12px 18px;display:flex;justify-content:space-between;align-items:center;">
+      <span style="font-size:14px;font-weight:700;">🗃️ Master Data — Dependency Factors</span>
+      <button onclick="closeMasterDataModal()" title="Close" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;line-height:1;padding:0 4px;opacity:0.8;">✕</button>
+    </div>
+    <div style="padding:14px 18px;overflow-y:auto;flex:1;">
+      <p style="font-size:11px;color:var(--muted);margin:0 0 10px;">
+        Multipliers that drive the cascade: parent units × factor = child units consumed. For multi-supplier pairs each row shows its supplier and (if any) active-window. Editing here feeds <code>deriveChildDemand</code> across LP→DP→DS→RM and the Raw Material Cascade tab.
+      </p>
+      <div id="dep-panel" style="font-size:12px;"></div>
+      <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center;">
+        <a href="javascript:void(0)" onclick="clearAllDepOverrides(); renderDepPanel(); runScenario();"
+           style="font-size:11px;color:var(--muted);text-decoration:underline;">
+          reset all to workbook
+        </a>
+        <span id="dep-override-badge" style="font-size:11px;color:var(--gold);font-weight:600;display:none;">● overridden</span>
+      </div>
+    </div>
   </div>
 </div>
 </body>
