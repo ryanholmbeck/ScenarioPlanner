@@ -2530,24 +2530,38 @@ function computeFefoScenario(product, scenRows) {
       lot.gapStart = null; lot.gapEnd = null; lot.gapQty = 0;
       continue;
     }
-    // Effective start = max(natural FEFO start, supply cursor, DOM)
+    // Default: keep pass-1's chain (which now matches the workbook because
+    // On Hold lots are excluded from cumulativeConsumed). Only override when
+    // a DOM gate or a cascading supply delay actually shifts effective start
+    // — otherwise we'd introduce an off-by-one-month error vs. the workbook.
     const naturalStart = lot.consumeStart;
-    let effStart = (naturalStart && naturalStart > supplyCursor) ? naturalStart : supplyCursor;
+    let effStart      = (naturalStart && naturalStart > supplyCursor) ? naturalStart : supplyCursor;
+    const cascaded    = (supplyCursor && naturalStart && supplyCursor > naturalStart);
+    let gated         = false;
     if (lot.dom && lot.dom > effStart) {
       lot.gapStart = effStart;
       lot.gapEnd   = lot.dom;
+      // Gap qty = demand DURING the gap window [effStart .. dom)
       lot.gapQty   = Math.max(0, Math.round(cumDemandAt(lot.dom) - cumDemandAt(effStart)));
       effStart     = lot.dom;
+      gated        = true;
     } else {
       lot.gapStart = null;
       lot.gapEnd   = null;
       lot.gapQty   = 0;
     }
     lot.effectiveStart = effStart;
-    // Revised runout: when cumDemand reaches cumAtStart + lot.avail
-    const targetCum = cumDemandAt(effStart) + (lot.avail || 0);
-    lot.scenRunout  = findFirstMonthAtCum(targetCum, effStart) || lot.scenRunout;
-    supplyCursor    = lot.scenRunout;
+    if (gated || cascaded) {
+      // Shift actually happened — recompute runout from the shifted start.
+      // cumDemandAt(effStart) covers all months ≤ effStart, so we add lot.avail
+      // ON TOP of demand already consumed up through effStart. This drifts vs.
+      // pass-1 by at most one month, which is acceptable when a gate is forcing
+      // the shift anyway.
+      const targetCum = cumDemandAt(effStart) + (lot.avail || 0);
+      lot.scenRunout  = findFirstMonthAtCum(targetCum, effStart) || lot.scenRunout;
+    }
+    // else: keep pass-1's scenRunout — exact workbook alignment, no drift.
+    supplyCursor = lot.scenRunout;
   }
 
   return result;
@@ -4002,22 +4016,18 @@ function updateExpiryTab(product, baseRows, scenRows) {
       const gapEnd   = scenLot?.gapEnd   || null;
       const gapQty   = scenLot?.gapQty   || 0;
 
-      // Risk qty = portion of THIS lot's avail unconsumed by the short-date
-      // cutoff. With DOM-aware chaining, consumption starts at effectiveStart
-      // (not at the prior lot's threshold), so the right formula is:
-      //   risk = lot.avail − (cumDemandAt(effExp) − cumDemandAt(effectiveStart))
-      // clamped to [0, lot.avail].
+      // Risk qty = portion of THIS lot's avail unconsumed at the short-date
+      // cutoff. Uses pass-1's chain semantics directly:
+      //   risk = clamp(0, lot.avail, lotCum − cumDemandAt(effExp))
+      // where lotCum = cumulative supply through THIS lot. When cumDemand at
+      // effExp ≥ lotCum, lot is fully consumed → risk 0. This matches the
+      // workbook's "runout vs short-date" comparison exactly when scen == base.
       const bRisk = new Date(baseRunout) > new Date(effExp);
       const sRisk = new Date(scenRunout) > new Date(effExp);
-      function _consumedThrough(fefo, start, until) {
-        if (!fefo || !start) return 0;
-        return Math.max(0, fefo.cumDemandAt(until) - fefo.cumDemandAt(start));
-      }
-      const baseStart = baseLot?.effectiveStart || null;
       const baseRisk = (isOnHold || forceAtRisk) ? lot.avail
-        : Math.min(lot.avail, Math.max(0, lot.avail - _consumedThrough(fefoBaseChained, baseStart, effExp)));
+        : (baseLot ? Math.min(lot.avail, Math.max(0, (baseLot.lotCum || 0) - fefoBaseChained.cumDemandAt(effExp))) : 0);
       const scenRisk = (isOnHold || forceAtRisk) ? lot.avail
-        : Math.min(lot.avail, Math.max(0, lot.avail - _consumedThrough(fefoScen, effectiveStart, effExp)));
+        : (scenLot ? Math.min(lot.avail, Math.max(0, (scenLot.lotCum || 0) - fefoScen.cumDemandAt(effExp))) : 0);
       // Δ tied to qty (not just boolean) so cosmetic month-boundary differences
       // when scen==base don't trip "NEW RISK qty 0".
       let statusDelta = '—';
