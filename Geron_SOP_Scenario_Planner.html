@@ -3897,11 +3897,32 @@ function updateExpiryTab(product, baseRows, scenRows) {
     const supOvCount  = Object.keys(supplierOverrides[product] || {}).length;
     const regions     = (typeof getActiveRegions === 'function') ? getActiveRegions() : null;
     const indications = (typeof getActiveIndications === 'function') ? getActiveIndications() : null;
+    // Compare against the known full lists so "Regions: EU,US" doesn't look
+    // bold/filtered when both regions actually IS the full set.
+    const knownRegions = (typeof getKnownRegions === 'function') ? getKnownRegions() : null;
+    const knownInds    = (typeof getKnownIndications === 'function') ? getKnownIndications() : null;
+    const regionsAllOn = (regions === null) || (Array.isArray(knownRegions) && regions.length === knownRegions.length);
+    const indsAllOn    = (indications === null) || (Array.isArray(knownInds) && indications.length === knownInds.length);
     // Tally cumDemand difference between base and scen — surfaces hidden drift
     let demandDelta = 0;
+    let maxAbsMonthlyDelta = 0;
+    let monthlyDiffCount   = 0;
     if (Array.isArray(baseRows) && Array.isArray(scenRows)) {
       const n = Math.min(baseRows.length, scenRows.length);
-      for (let i = 0; i < n; i++) demandDelta += ((scenRows[i]?.demand||0) - (baseRows[i]?.demand||0));
+      for (let i = 0; i < n; i++) {
+        const d = (scenRows[i]?.demand||0) - (baseRows[i]?.demand||0);
+        demandDelta += d;
+        if (Math.abs(d) > 0.001) monthlyDiffCount++;
+        if (Math.abs(d) > maxAbsMonthlyDelta) maxAbsMonthlyDelta = Math.abs(d);
+      }
+    }
+    // Per-lot divergence audit — show lots whose fefoBase.scenRunout differs
+    // from fefoScen.scenRunout even though demand should match. This catches
+    // computed-runout drift that the netted demandDelta would hide.
+    const divergedLots = [];
+    for (let i = 0; i < fefoBaseChained.length; i++) {
+      const b = fefoBaseChained[i], s = fefoScen[i];
+      if (b && s && b.scenRunout !== s.scenRunout) divergedLots.push(`${b.lot}: ${b.scenRunout} vs ${s.scenRunout}`);
     }
     const chip = (label, val, neutral) => `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="font-weight:600;color:var(--navy);">${label}:</span> <span style="color:${neutral?'var(--muted)':'var(--navy)'};font-weight:${neutral?'400':'700'};">${val}</span></span>`;
     const flag = (cond, label) => cond ? `<span style="display:inline-flex;align-items:center;gap:4px;color:#d97706;font-weight:700;">⚠ ${label}</span>` : '';
@@ -3911,14 +3932,17 @@ function updateExpiryTab(product, baseRows, scenRows) {
       chip('EU combine', euCombineOn ? 'ON' : 'OFF (separated)', euCombineOn),
       chip('LP+DP combine', lpCombine ? 'ON' : 'OFF', !lpCombine),
       chip('Supply mode', supMode, supMode === 'normal'),
-      chip('Regions', regions === null ? 'All' : regions.join(','), regions === null),
-      chip('Indications', indications === null ? 'All' : (indications.length + ' selected'), indications === null),
+      chip('Regions', regionsAllOn ? 'All' : (regions||[]).join(','), regionsAllOn),
+      chip('Indications', indsAllOn ? 'All' : ((indications||[]).length + ' selected'), indsAllOn),
       chip('Custom streams', customs, customs === 0),
       chip('Lot overrides', lotOvCount, lotOvCount === 0),
       chip('Prod overrides', prodOvCount, prodOvCount === 0),
       chip('Supplier overrides', supOvCount, supOvCount === 0),
       pbsActive ? flag(true, 'Batch-size override active (' + pbsOv + ')') : '',
-      chip('scen − base cum-demand', (demandDelta >= 0 ? '+' : '') + Math.round(demandDelta).toLocaleString(), Math.abs(demandDelta) < 1),
+      chip('scen − base cum-demand', (demandDelta >= 0 ? '+' : '') + Math.round(demandDelta).toLocaleString() + (monthlyDiffCount ? ` (${monthlyDiffCount} mo differ, max |Δ|=${maxAbsMonthlyDelta.toFixed(2)})` : ''), Math.abs(demandDelta) < 1 && monthlyDiffCount === 0),
+      divergedLots.length
+        ? `<span style="color:#dc2626;font-weight:700;" title="${divergedLots.join('\n')}">⚠ ${divergedLots.length} lot(s) base≠scen runout</span>`
+        : `<span style="color:var(--muted);">No per-lot divergence</span>`,
     ].filter(Boolean).join('');
   }
 
