@@ -6423,31 +6423,609 @@ function closeKpiDrill() {
   document.getElementById('kpi-drill-overlay').classList.remove('open');
 }
 
-// ── Master Data modal — hosts the dependency-factor editor (and is sized to
-// host more master-data viewers later: supplier registry browser, lot
-// inventory inspector, etc.). renderDepPanel targets the same #dep-panel id
-// it always did — only the surrounding chrome moved from sidebar to modal.
+// ══════════════════════════════════════════════════════════════════════════════
+//  MASTER DATA MODAL — tabbed editor for every embedded data source
+//
+//  The HTML is the system of record. Each tab views one slice of the embedded
+//  data, exports it as CSV (for offline editing or hand-off), and accepts an
+//  uploaded CSV that replaces that slice. Replacements go into the existing
+//  override layers (lotOverrides, supplierOverrides, depOverrides, prodOverrides)
+//  for those that have one, and into new "master baselines" for the rest
+//  (PROD_DATA, DEMAND_BY_STREAM, RAW, COST_DATA) — those are overwritten
+//  in place with a baseline snapshot kept so the user can revert.
+// ══════════════════════════════════════════════════════════════════════════════
+
+let mdActiveTab = 'deps';
+// Baseline snapshots captured at first modal open — restored by "Reset section"
+// or "Reset ALL". Deep-cloned via JSON so subsequent edits to live data don't
+// mutate the baseline.
+const mdBaselines = {};
+function _mdSnapshot(name, val) {
+  if (mdBaselines[name] === undefined) {
+    try { mdBaselines[name] = JSON.parse(JSON.stringify(val)); } catch (e) { mdBaselines[name] = val; }
+  }
+}
+function _mdCaptureBaselines() {
+  _mdSnapshot('PROD_DATA',         typeof PROD_DATA         !== 'undefined' ? PROD_DATA         : null);
+  _mdSnapshot('DEMAND_BY_STREAM',  typeof DEMAND_BY_STREAM  !== 'undefined' ? DEMAND_BY_STREAM  : null);
+  _mdSnapshot('RAW',               typeof RAW               !== 'undefined' ? RAW               : null);
+  _mdSnapshot('COST_DATA',         typeof COST_DATA         !== 'undefined' ? COST_DATA         : null);
+  _mdSnapshot('FEFO_LOTS',         typeof FEFO_LOTS         !== 'undefined' ? FEFO_LOTS         : null);
+  _mdSnapshot('SUPPLIER_REGISTRY', typeof SUPPLIER_REGISTRY !== 'undefined' ? SUPPLIER_REGISTRY : null);
+  _mdSnapshot('DEPENDENCIES_FULL', typeof DEPENDENCIES_FULL !== 'undefined' ? DEPENDENCIES_FULL : null);
+}
+
 function openMasterDataModal() {
   const ov = document.getElementById('master-data-overlay');
   if (!ov) return;
+  _mdCaptureBaselines();
   ov.style.display = 'flex';
-  if (typeof renderDepPanel === 'function') renderDepPanel();
+  mdSwitchTab(mdActiveTab);
 }
 function closeMasterDataModal() {
   const ov = document.getElementById('master-data-overlay');
   if (ov) ov.style.display = 'none';
 }
-// Backdrop click closes
 document.getElementById('master-data-overlay')?.addEventListener('click', e => {
   if (e.target === document.getElementById('master-data-overlay')) closeMasterDataModal();
 });
-// Esc closes
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     const ov = document.getElementById('master-data-overlay');
     if (ov && ov.style.display !== 'none') closeMasterDataModal();
   }
 });
+
+function mdSwitchTab(name) {
+  mdActiveTab = name;
+  document.querySelectorAll('.md-tab').forEach(b => {
+    b.classList.toggle('active', b.getAttribute('data-mdtab') === name);
+  });
+  const titles = { deps:'Dependencies', suppliers:'Suppliers', lots:'Lots', prod:'Production', demand:'Demand Streams', raw:'Product Meta', costs:'Costs' };
+  document.getElementById('md-section-title').textContent = titles[name] || name;
+  const body = document.getElementById('md-body');
+  body.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted);">Loading…</div>';
+  requestAnimationFrame(() => {
+    try {
+      if      (name === 'deps')      mdRenderDeps(body);
+      else if (name === 'suppliers') mdRenderSuppliers(body);
+      else if (name === 'lots')      mdRenderLots(body);
+      else if (name === 'prod')      mdRenderProd(body);
+      else if (name === 'demand')    mdRenderDemand(body);
+      else if (name === 'raw')       mdRenderRaw(body);
+      else if (name === 'costs')     mdRenderCosts(body);
+    } catch (e) {
+      body.innerHTML = `<div style="color:var(--red);padding:12px;">Failed to render: ${e.message}</div>`;
+      console.error(e);
+    }
+    _mdUpdateStatus();
+  });
+}
+
+function _mdUpdateStatus() {
+  const status = document.getElementById('md-section-status');
+  const footer = document.getElementById('md-footer-summary');
+  if (!status || !footer) return;
+  const tally = {
+    lot:      Object.values(lotOverrides     || {}).reduce((a,o)=>a+Object.keys(o).length,0),
+    supplier: Object.values(supplierOverrides|| {}).reduce((a,o)=>a+Object.keys(o).length,0),
+    dep:      (typeof depOverrides !== 'undefined') ? Object.values(depOverrides||{}).reduce((a,o)=>a+Object.keys(o).length,0) : 0,
+    prod:     Object.values(prodOverrides    || {}).reduce((a,o)=>a+Object.keys(o).length,0),
+  };
+  const live = { lot:tally.lot, supplier:tally.supplier, dep:tally.dep, prod:tally.prod };
+  const map  = { deps:'dep', suppliers:'supplier', lots:'lot', prod:'prod' };
+  const k = map[mdActiveTab];
+  status.textContent = k ? (live[k] ? `● ${live[k]} override${live[k]===1?'':'s'} in this section` : 'no overrides') : '';
+  status.style.color = (k && live[k]) ? 'var(--gold)' : 'var(--muted)';
+  status.style.fontWeight = (k && live[k]) ? '700' : '400';
+  const total = live.lot + live.supplier + live.dep + live.prod;
+  footer.textContent = total
+    ? `${total} override${total===1?'':'s'} active — lot: ${live.lot}, supplier: ${live.supplier}, dep: ${live.dep}, prod: ${live.prod}`
+    : 'No overrides — running on workbook baseline.';
+}
+
+// ── CSV helpers ─────────────────────────────────────────────────────────────
+function _mdCsvEscape(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  return (/[",\n\r]/.test(s)) ? '"' + s.replace(/"/g,'""') + '"' : s;
+}
+function _mdRowsToCsv(headers, rows) {
+  const lines = [headers.join(',')];
+  for (const r of rows) lines.push(headers.map(h => _mdCsvEscape(r[h])).join(','));
+  return lines.join('\n');
+}
+function _mdCsvToRows(text) {
+  // Basic CSV parser — handles quoted fields, embedded commas, escaped quotes.
+  const rows = [];
+  let i = 0, field = '', row = [], inQ = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"' && text[i+1] === '"') { field += '"'; i += 2; continue; }
+      if (c === '"') { inQ = false; i++; continue; }
+      field += c; i++;
+    } else {
+      if (c === '"') { inQ = true; i++; continue; }
+      if (c === ',') { row.push(field); field=''; i++; continue; }
+      if (c === '\r') { i++; continue; }
+      if (c === '\n') { row.push(field); rows.push(row); row=[]; field=''; i++; continue; }
+      field += c; i++;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  if (!rows.length) return [];
+  const headers = rows[0].map(h => h.trim());
+  return rows.slice(1).filter(r => r.length && r.some(v => v !== ''))
+    .map(r => Object.fromEntries(headers.map((h,j)=>[h, r[j] !== undefined ? r[j] : ''])));
+}
+function _mdDownloadFile(filename, text) {
+  const blob = new Blob([text], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+  setTimeout(()=>{ document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+}
+function _mdNum(v) {
+  if (v === '' || v === null || v === undefined) return 0;
+  const n = parseFloat(v);
+  return isFinite(n) ? n : 0;
+}
+function _mdStr(v) { return (v === null || v === undefined) ? '' : String(v); }
+
+// ── Tab body renderers ──────────────────────────────────────────────────────
+function mdRenderDeps(host) {
+  const rows = [];
+  if (typeof DEPENDENCIES_FULL === 'object' && DEPENDENCIES_FULL) {
+    for (const pairKey of Object.keys(DEPENDENCIES_FULL).sort()) {
+      const [parent, child] = pairKey.split('||');
+      for (const r of (DEPENDENCIES_FULL[pairKey] || [])) {
+        rows.push({ parent, child, supplier:r.supplier||'', factor:r.factor, basis:r.basis||'',
+                    active_from:r.active_from||'', active_through:r.active_through||'' });
+      }
+    }
+  }
+  host.innerHTML = `
+    <p class="md-hint">Multipliers driving the LP→DP→DS→RM cascade. Edit individual factors in the table below; CSV export captures every row. Editing here also still works through the legacy <code>setDepOverride</code> path so the cascade tabs refresh live.</p>
+    <div id="dep-panel" style="font-size:12px;"></div>
+    <div style="margin-top:14px;">
+      <div style="font-weight:700;font-size:11px;color:var(--muted);margin-bottom:4px;">Full registry (CSV-exportable)</div>
+      <table>
+        <thead><tr><th>Parent</th><th>Child</th><th>Supplier</th><th>Factor</th><th>Basis</th><th>Active from</th><th>Active through</th></tr></thead>
+        <tbody>${rows.map(r=>`<tr><td>${r.parent}</td><td>${r.child}</td><td>${r.supplier}</td><td style="text-align:right;font-family:monospace">${r.factor}</td><td>${r.basis}</td><td>${r.active_from}</td><td>${r.active_through}</td></tr>`).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:14px;font-style:italic;">No dependency registry.</td></tr>'}</tbody>
+      </table>
+    </div>`;
+  if (typeof renderDepPanel === 'function') renderDepPanel();
+}
+
+function mdRenderSuppliers(host) {
+  const rows = [];
+  if (typeof SUPPLIER_REGISTRY === 'object' && SUPPLIER_REGISTRY) {
+    for (const product of Object.keys(SUPPLIER_REGISTRY).sort()) {
+      for (const r of (SUPPLIER_REGISTRY[product] || [])) {
+        const ov = (supplierOverrides[product]||{})[r.supplier];
+        const eff = ov ? Object.assign({}, r, ov) : r;
+        rows.push({
+          product, supplier: r.supplier,
+          batch_size: eff.batch_size, lead_time: eff.lead_time,
+          target_moh: eff.target_moh, critical_moh: eff.critical_moh, overstock_moh: eff.overstock_moh,
+          active_from: eff.active_from || '', active_through: eff.active_through || '',
+          manual_toggle: eff.manual_toggle ? 1 : 0, primary: eff.primary ? 1 : 0,
+          binding_mo: eff.binding_mo || '', overridden: ov ? 'YES' : '',
+        });
+      }
+    }
+  }
+  host.innerHTML = `
+    <p class="md-hint">Per-product supplier registry with time-windowed batch_size / lead_time / MOH targets and active-from/through windows. Edit in the <b>🏭 Suppliers</b> sidebar for the live form; this is the canonical view + CSV pipe.</p>
+    <table>
+      <thead><tr><th>Product</th><th>Supplier</th><th>Batch</th><th>LT</th><th>Target MOH</th><th>Crit MOH</th><th>Overstock</th><th>Active from</th><th>Active through</th><th>Active</th><th>Primary</th><th>Binding mo</th><th>Ov</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr><td>${r.product}</td><td>${r.supplier}</td><td style="text-align:right;font-family:monospace">${r.batch_size}</td><td style="text-align:right">${r.lead_time}</td><td style="text-align:right">${r.target_moh}</td><td style="text-align:right">${r.critical_moh}</td><td style="text-align:right">${r.overstock_moh}</td><td>${r.active_from.slice(0,10)}</td><td>${r.active_through.slice(0,10)}</td><td style="text-align:center">${r.manual_toggle?'✓':''}</td><td style="text-align:center">${r.primary?'★':''}</td><td style="text-align:center">${r.binding_mo}</td><td style="text-align:center;color:var(--gold);font-weight:700">${r.overridden}</td></tr>`).join('') || '<tr><td colspan="13" style="text-align:center;color:var(--muted);padding:14px;font-style:italic;">No supplier registry.</td></tr>'}</tbody>
+    </table>`;
+}
+
+function mdRenderLots(host) {
+  const rows = [];
+  if (typeof _effectiveFEFOLots === 'function') {
+    for (const l of _effectiveFEFOLots()) {
+      const ov = (lotOverrides[l.product]||{})[l.lot];
+      rows.push({
+        product: l.product, lot: l.lot, seq: l.seq, status: l.status,
+        avail: l.avail, dom: l.dom || '', expiry: (l.expiry||'').slice(0,10),
+        runout: (l.runout||'').slice(0,10),
+        release_deadline: (l.release_deadline||''),
+        cumAvail: l.cumAvail || '', risk: l.risk || 0,
+        overridden: ov ? (ov._added ? 'NEW' : ov._deleted ? 'DEL' : 'EDIT') : '',
+      });
+    }
+  }
+  host.innerHTML = `
+    <p class="md-hint">Effective lot registry = workbook baseline + your inline edits. The <b>🧪 Lots</b> column inside the <b>Expiry Risk</b> tab is the live editor. Export → tweak in Excel → re-import via this tab to bulk-load lot updates.</p>
+    <table>
+      <thead><tr><th>Product</th><th>Lot</th><th>Seq</th><th>Status</th><th>Avail</th><th>DOM</th><th>Expiry</th><th>Runout</th><th>Release deadline</th><th>cumAvail</th><th>Risk</th><th>Ov</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr><td>${r.product}</td><td style="font-family:monospace">${r.lot}</td><td style="text-align:center">${r.seq}</td><td>${r.status}</td><td style="text-align:right;font-family:monospace">${r.avail}</td><td>${r.dom.slice(0,10)}</td><td>${r.expiry}</td><td>${r.runout}</td><td>${r.release_deadline.slice(0,10)}</td><td style="text-align:right;font-family:monospace">${r.cumAvail}</td><td style="text-align:right;font-family:monospace">${r.risk}</td><td style="text-align:center;color:var(--gold);font-weight:700">${r.overridden}</td></tr>`).join('') || '<tr><td colspan="12" style="text-align:center;color:var(--muted);padding:14px;font-style:italic;">No lots.</td></tr>'}</tbody>
+    </table>`;
+}
+
+function mdRenderProd(host) {
+  const products = (typeof PROD_DATA !== 'undefined' && Array.isArray(PROD_DATA))
+    ? Array.from(new Set(PROD_DATA.map(r=>r.product))).sort() : [];
+  const select = `
+    <label style="font-size:11px;font-weight:600;">Filter product:
+      <select id="md-prod-filter" onchange="mdRenderProd(document.getElementById('md-body'))" style="font-size:11px;padding:2px 5px;">
+        <option value="">All</option>
+        ${products.map(p=>`<option ${(window._mdProdFilter===p)?'selected':''}>${p}</option>`).join('')}
+      </select>
+    </label>`;
+  setTimeout(()=>{
+    const el = document.getElementById('md-prod-filter');
+    if (el) el.addEventListener('change', e => { window._mdProdFilter = e.target.value; });
+  }, 0);
+  const filt = window._mdProdFilter || '';
+  const rows = (PROD_DATA||[]).filter(r => !filt || r.product === filt);
+  host.innerHTML = `
+    <p class="md-hint">Monthly production schedule rows from the workbook's "Planning Engine" sheet — bi (beginning inventory), demand, prod (planned production), ei (ending inventory), MOH, risk, supplier. ${rows.length.toLocaleString()} rows. Edit production via the <b>Production tab's override widget</b>; bulk imports replace the entire dataset.</p>
+    <div style="margin-bottom:8px;">${select}</div>
+    <table>
+      <thead><tr><th>Month</th><th>Product</th><th>Category</th><th>Unit</th><th>BI</th><th>Demand</th><th>Prod</th><th>EI</th><th>MOH</th><th>Risk</th><th>Supplier</th></tr></thead>
+      <tbody>${rows.slice(0, 600).map(r=>`<tr><td>${(r.month||'').slice(0,7)}</td><td>${r.product}</td><td style="font-size:10px;color:var(--muted)">${r.category||''}</td><td style="font-size:10px;color:var(--muted)">${r.unit||''}</td><td style="text-align:right;font-family:monospace">${typeof fmt==='function'?fmt(r.bi,0):r.bi}</td><td style="text-align:right;font-family:monospace">${typeof fmt==='function'?fmt(r.demand,0):r.demand}</td><td style="text-align:right;font-family:monospace">${typeof fmt==='function'?fmt(r.prod,0):r.prod}</td><td style="text-align:right;font-family:monospace">${typeof fmt==='function'?fmt(r.ei,0):r.ei}</td><td style="text-align:right;font-family:monospace">${(r.moh||0).toFixed?(r.moh||0).toFixed(1):r.moh}</td><td>${r.risk||''}</td><td style="font-size:10px;color:var(--muted)">${r.supplier||''}</td></tr>`).join('')}</tbody>
+    </table>
+    ${rows.length > 600 ? `<div style="font-size:10px;color:var(--muted);margin-top:6px;font-style:italic;">First 600 of ${rows.length} rows shown — CSV export contains all.</div>` : ''}`;
+}
+
+function mdRenderDemand(host) {
+  const streams = (typeof DEMAND_BY_STREAM === 'object' && DEMAND_BY_STREAM) ? Object.keys(DEMAND_BY_STREAM).sort() : [];
+  // Pivot first 24 months × streams
+  const monthSet = new Set();
+  streams.forEach(k => (DEMAND_BY_STREAM[k]||[]).forEach(r => monthSet.add(r.m)));
+  const months = Array.from(monthSet).sort();
+  const sample = months.slice(0, 24);
+  const lookup = (k, m) => (DEMAND_BY_STREAM[k]||[]).find(r=>r.m===m)?.d || 0;
+  host.innerHTML = `
+    <p class="md-hint">Per-stream monthly demand. ${streams.length} streams × ${months.length} months loaded. CSV export pivots stream-name down rows and month-by-month columns. Showing first 24 months below — full series in CSV.</p>
+    <table>
+      <thead><tr><th>Stream</th>${sample.map(m=>`<th style="text-align:right">${m.slice(0,7)}</th>`).join('')}</tr></thead>
+      <tbody>${streams.map(s=>`<tr><td style="font-size:10px">${s}</td>${sample.map(m=>`<td style="text-align:right;font-family:monospace;font-size:10px">${Math.round(lookup(s,m))}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table>`;
+}
+
+function mdRenderRaw(host) {
+  const products = (typeof RAW === 'object' && RAW) ? Object.keys(RAW).sort() : [];
+  host.innerHTML = `
+    <p class="md-hint">Per-product metadata: category, unit, MOH targets, batch size, lead time, primary supplier. This is the fallback used when the supplier registry doesn't cover a product/month.</p>
+    <table>
+      <thead><tr><th>Product</th><th>Category</th><th>Unit</th><th>Target MOH</th><th>Critical MOH</th><th>Overstock</th><th>Batch size</th><th>Lead time</th><th>Supplier</th></tr></thead>
+      <tbody>${products.map(p=>{ const r = RAW[p]||{}; return `<tr><td><b>${p}</b></td><td>${r.category||''}</td><td>${r.unit||''}</td><td style="text-align:right">${r.target_moh||''}</td><td style="text-align:right">${r.critical_moh||''}</td><td style="text-align:right">${r.overstock_moh||''}</td><td style="text-align:right;font-family:monospace">${r.batch_size||''}</td><td style="text-align:right">${r.lead_time||''}</td><td style="font-size:10px;color:var(--muted)">${r.supplier||''}</td></tr>`; }).join('')}</tbody>
+    </table>`;
+}
+
+function mdRenderCosts(host) {
+  const products = (typeof COST_DATA === 'object' && COST_DATA && COST_DATA.products) ? Object.keys(COST_DATA.products).sort() : [];
+  host.innerHTML = `
+    <p class="md-hint">Per-product cost data: inventory value per UoM, production cost per batch or per UoM, batch-vs-UoM costing flag. Drives the Inventory Valuation and Budget Impact tabs.</p>
+    <table>
+      <thead><tr><th>Product</th><th>Inv value / UoM</th><th>Prod cost / batch</th><th>Prod cost / UoM</th><th>Cost by batch?</th><th>Unit</th><th>Supplier</th></tr></thead>
+      <tbody>${products.map(p=>{ const r = (COST_DATA.products||{})[p]||{}; return `<tr><td><b>${p}</b></td><td style="text-align:right;font-family:monospace">${r.inv_value_uom||''}</td><td style="text-align:right;font-family:monospace">${r.prod_cost_batch||''}</td><td style="text-align:right;font-family:monospace">${r.prod_cost_uom||''}</td><td style="text-align:center">${r.cost_by_batch?'✓':''}</td><td>${r.unit||''}</td><td style="font-size:10px;color:var(--muted)">${r.supplier||''}</td></tr>`; }).join('')}</tbody>
+    </table>`;
+}
+
+// ── CSV export per tab ──────────────────────────────────────────────────────
+function mdDownloadCSV() {
+  const ts = new Date().toISOString().slice(0,10);
+  let filename = `master-data-${mdActiveTab}-${ts}.csv`;
+  let csv = '';
+  switch (mdActiveTab) {
+    case 'deps': {
+      const rows = [];
+      for (const k of Object.keys(DEPENDENCIES_FULL||{})) {
+        const [parent, child] = k.split('||');
+        for (const r of (DEPENDENCIES_FULL[k]||[])) {
+          rows.push({ parent, child, supplier:r.supplier||'', factor:r.factor, basis:r.basis||'',
+                      active_from:r.active_from||'', active_through:r.active_through||'' });
+        }
+      }
+      csv = _mdRowsToCsv(['parent','child','supplier','factor','basis','active_from','active_through'], rows);
+      break;
+    }
+    case 'suppliers': {
+      const rows = [];
+      for (const product of Object.keys(SUPPLIER_REGISTRY||{})) {
+        for (const r of (SUPPLIER_REGISTRY[product]||[])) {
+          const ov = (supplierOverrides[product]||{})[r.supplier];
+          const eff = ov ? Object.assign({}, r, ov) : r;
+          rows.push({ product, supplier:r.supplier, batch_size:eff.batch_size, lead_time:eff.lead_time,
+                      target_moh:eff.target_moh, critical_moh:eff.critical_moh, overstock_moh:eff.overstock_moh,
+                      active_from:eff.active_from||'', active_through:eff.active_through||'',
+                      manual_toggle:eff.manual_toggle?1:0, primary:eff.primary?1:0,
+                      binding_mo:eff.binding_mo||'' });
+        }
+      }
+      csv = _mdRowsToCsv(['product','supplier','batch_size','lead_time','target_moh','critical_moh','overstock_moh','active_from','active_through','manual_toggle','primary','binding_mo'], rows);
+      break;
+    }
+    case 'lots': {
+      const rows = (typeof _effectiveFEFOLots === 'function') ? _effectiveFEFOLots().map(l => ({
+        product:l.product, lot:l.lot, seq:l.seq, status:l.status||'OK',
+        avail:l.avail||0, dom:l.dom||'', expiry:(l.expiry||'').slice(0,10),
+        runout:(l.runout||'').slice(0,10), release_deadline:(l.release_deadline||'').slice(0,10),
+        cumAvail:l.cumAvail||'', risk:l.risk||0,
+      })) : [];
+      csv = _mdRowsToCsv(['product','lot','seq','status','avail','dom','expiry','runout','release_deadline','cumAvail','risk'], rows);
+      break;
+    }
+    case 'prod': {
+      const rows = (PROD_DATA||[]).map(r => ({
+        month:(r.month||'').slice(0,10), product:r.product, category:r.category||'', unit:r.unit||'',
+        bi:r.bi||0, demand:r.demand||0, prod:r.prod||0, ei:r.ei||0, moh:r.moh||0, risk:r.risk||'',
+        rm:(r.rm||'').slice(0,10), rq:r.rq||0, supplier:r.supplier||'',
+      }));
+      csv = _mdRowsToCsv(['month','product','category','unit','bi','demand','prod','ei','moh','risk','rm','rq','supplier'], rows);
+      break;
+    }
+    case 'demand': {
+      const rows = [];
+      for (const k of Object.keys(DEMAND_BY_STREAM||{})) {
+        for (const r of (DEMAND_BY_STREAM[k]||[])) {
+          rows.push({ stream:k, month:(r.m||'').slice(0,10), demand:r.d||0 });
+        }
+      }
+      csv = _mdRowsToCsv(['stream','month','demand'], rows);
+      break;
+    }
+    case 'raw': {
+      const rows = Object.entries(RAW||{}).map(([p,r])=>({
+        product:p, category:r.category||'', unit:r.unit||'',
+        target_moh:r.target_moh||'', critical_moh:r.critical_moh||'', overstock_moh:r.overstock_moh||'',
+        batch_size:r.batch_size||'', lead_time:r.lead_time||'', supplier:r.supplier||'',
+      }));
+      csv = _mdRowsToCsv(['product','category','unit','target_moh','critical_moh','overstock_moh','batch_size','lead_time','supplier'], rows);
+      break;
+    }
+    case 'costs': {
+      const rows = Object.entries((COST_DATA||{}).products||{}).map(([p,r])=>({
+        product:p, inv_value_uom:r.inv_value_uom||0, prod_cost_batch:r.prod_cost_batch||0,
+        prod_cost_uom:r.prod_cost_uom||0, cost_by_batch:r.cost_by_batch?1:0,
+        unit:r.unit||'', supplier:r.supplier||'',
+      }));
+      csv = _mdRowsToCsv(['product','inv_value_uom','prod_cost_batch','prod_cost_uom','cost_by_batch','unit','supplier'], rows);
+      break;
+    }
+  }
+  _mdDownloadFile(filename, csv);
+}
+
+// ── CSV import per tab ──────────────────────────────────────────────────────
+function mdUploadCSV(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const rows = _mdCsvToRows(e.target.result);
+      if (!rows.length) { alert('CSV had no data rows.'); return; }
+      const before = mdActiveTab;
+      const applied = _mdApplyCsv(mdActiveTab, rows);
+      alert(`Imported ${applied} ${before} row${applied===1?'':'s'}.`);
+      mdSwitchTab(before);
+      if (typeof runScenario === 'function') runScenario();
+    } catch (err) {
+      alert('CSV import failed: ' + err.message);
+      console.error(err);
+    } finally {
+      ev.target.value = '';
+    }
+  };
+  reader.readAsText(file);
+}
+
+function _mdApplyCsv(tab, rows) {
+  let count = 0;
+  switch (tab) {
+    case 'lots': {
+      // Strategy: write each CSV row as an override on lotOverrides. Lots whose
+      // (product, lot) match the workbook get partial-patch overrides; lots not
+      // in the workbook get marked _added.
+      const wbKeys = new Set();
+      if (typeof FEFO_LOTS !== 'undefined') for (const l of FEFO_LOTS) wbKeys.add(l.product + '||' + l.lot);
+      // Reset lot overrides for products we're touching, so deletions in CSV
+      // are honored.
+      const touched = new Set();
+      for (const r of rows) { if (r.product) touched.add(r.product); }
+      for (const p of touched) delete lotOverrides[p];
+      for (const r of rows) {
+        const product = _mdStr(r.product).trim();
+        const lot     = _mdStr(r.lot).trim();
+        if (!product || !lot) continue;
+        const key = product + '||' + lot;
+        const patch = {
+          status: _mdStr(r.status) || 'OK',
+          avail: _mdNum(r.avail),
+          dom: _mdStr(r.dom) || null,
+          expiry: _mdStr(r.expiry) || null,
+        };
+        if (!wbKeys.has(key)) {
+          patch._added = true;
+          patch.product = product;
+          patch.lot = lot;
+          patch.seq = _mdNum(r.seq) || 0;
+          patch.cumAvail = _mdNum(r.cumAvail);
+          patch.risk = _mdNum(r.risk);
+          patch.runout = _mdStr(r.runout) || null;
+          patch.release_deadline = _mdStr(r.release_deadline) || null;
+          patch.days_to_release = null;
+        }
+        if (!lotOverrides[product]) lotOverrides[product] = {};
+        lotOverrides[product][lot] = Object.assign({}, lotOverrides[product][lot]||{}, patch);
+        count++;
+      }
+      if (typeof _persistLotOverrides === 'function') _persistLotOverrides();
+      break;
+    }
+    case 'suppliers': {
+      // Replace supplierOverrides wholesale based on CSV rows.
+      const groups = {};
+      for (const r of rows) {
+        const p = _mdStr(r.product).trim();
+        const s = _mdStr(r.supplier).trim();
+        if (!p || !s) continue;
+        if (!groups[p]) groups[p] = {};
+        groups[p][s] = {
+          batch_size: _mdNum(r.batch_size),
+          lead_time: _mdNum(r.lead_time),
+          target_moh: _mdNum(r.target_moh),
+          critical_moh: _mdNum(r.critical_moh),
+          overstock_moh: _mdNum(r.overstock_moh),
+          active_from: _mdStr(r.active_from) || null,
+          active_through: _mdStr(r.active_through) || null,
+          manual_toggle: _mdNum(r.manual_toggle) ? 1 : 0,
+          primary: _mdNum(r.primary) ? 1 : 0,
+          binding_mo: _mdNum(r.binding_mo) || 9,
+        };
+        count++;
+      }
+      Object.keys(groups).forEach(p => { supplierOverrides[p] = groups[p]; });
+      if (typeof _persistSupplierOverrides === 'function') _persistSupplierOverrides();
+      break;
+    }
+    case 'deps': {
+      // Overwrite DEPENDENCIES_FULL in memory. We DO NOT route via setDepOverride
+      // for bulk import — that's row-by-row UX. CSV import is "the whole table
+      // is what you say it is."
+      const grouped = {};
+      for (const r of rows) {
+        const parent = _mdStr(r.parent).trim();
+        const child  = _mdStr(r.child).trim();
+        if (!parent || !child) continue;
+        const key = parent + '||' + child;
+        if (!grouped[key]) grouped[key] = [];
+        grouped[key].push({
+          parent, child,
+          supplier: _mdStr(r.supplier) || '',
+          factor: _mdNum(r.factor),
+          basis: _mdStr(r.basis),
+          active_from: _mdStr(r.active_from) || null,
+          active_through: _mdStr(r.active_through) || null,
+        });
+        count++;
+      }
+      window.DEPENDENCIES_FULL = grouped;
+      // Rebuild flat DEPENDENCIES (parent→child→factor) from primary supplier rows
+      const flat = {};
+      for (const k of Object.keys(grouped)) {
+        const child = k.split('||')[1];
+        const primary = grouped[k][0];
+        if (primary) flat[child] = primary.factor;
+      }
+      window.DEPENDENCIES = flat;
+      break;
+    }
+    case 'prod': {
+      // Overwrite PROD_DATA wholesale from CSV.
+      window.PROD_DATA = rows.map(r => ({
+        month: _mdStr(r.month).slice(0,10),
+        ml: _mdStr(r.month).slice(0,7),
+        product: _mdStr(r.product),
+        category: _mdStr(r.category),
+        unit: _mdStr(r.unit),
+        bi: _mdNum(r.bi), demand: _mdNum(r.demand), prod: _mdNum(r.prod), ei: _mdNum(r.ei),
+        moh: _mdNum(r.moh), risk: _mdStr(r.risk),
+        rm: _mdStr(r.rm).slice(0,10) || _mdStr(r.month).slice(0,10),
+        rq: _mdNum(r.rq), supplier: _mdStr(r.supplier),
+      })).filter(r => r.month && r.product);
+      count = window.PROD_DATA.length;
+      break;
+    }
+    case 'demand': {
+      // Overwrite DEMAND_BY_STREAM wholesale.
+      const grouped = {};
+      for (const r of rows) {
+        const s = _mdStr(r.stream).trim();
+        const m = _mdStr(r.month).slice(0,10);
+        if (!s || !m) continue;
+        if (!grouped[s]) grouped[s] = [];
+        grouped[s].push({ m, d: _mdNum(r.demand) });
+        count++;
+      }
+      // Sort each stream's series by month
+      Object.keys(grouped).forEach(s => grouped[s].sort((a,b)=>a.m.localeCompare(b.m)));
+      window.DEMAND_BY_STREAM = grouped;
+      break;
+    }
+    case 'raw': {
+      const next = {};
+      for (const r of rows) {
+        const p = _mdStr(r.product).trim();
+        if (!p) continue;
+        next[p] = {
+          category: _mdStr(r.category), unit: _mdStr(r.unit),
+          target_moh: _mdNum(r.target_moh) || 9, critical_moh: _mdNum(r.critical_moh) || 6,
+          overstock_moh: _mdNum(r.overstock_moh) || 18,
+          batch_size: _mdNum(r.batch_size), lead_time: _mdNum(r.lead_time) || 3,
+          supplier: _mdStr(r.supplier),
+        };
+        count++;
+      }
+      window.RAW = next;
+      break;
+    }
+    case 'costs': {
+      const next = Object.assign({}, COST_DATA || {});
+      next.products = next.products || {};
+      for (const r of rows) {
+        const p = _mdStr(r.product).trim();
+        if (!p) continue;
+        next.products[p] = {
+          inv_value_uom: _mdNum(r.inv_value_uom),
+          prod_cost_batch: _mdNum(r.prod_cost_batch),
+          prod_cost_uom: _mdNum(r.prod_cost_uom),
+          cost_by_batch: !!_mdNum(r.cost_by_batch),
+          unit: _mdStr(r.unit) || 'units',
+          supplier: _mdStr(r.supplier),
+        };
+        count++;
+      }
+      window.COST_DATA = next;
+      break;
+    }
+  }
+  return count;
+}
+
+function mdResetTab() {
+  if (!confirm('Clear all changes in this section and reload from baseline? This affects only the current tab.')) return;
+  switch (mdActiveTab) {
+    case 'lots':      lotOverrides      = {}; if (typeof _persistLotOverrides      === 'function') _persistLotOverrides();      break;
+    case 'suppliers': supplierOverrides = {}; if (typeof _persistSupplierOverrides === 'function') _persistSupplierOverrides(); break;
+    case 'deps':      if (typeof clearAllDepOverrides === 'function') clearAllDepOverrides();
+                      if (mdBaselines.DEPENDENCIES_FULL) window.DEPENDENCIES_FULL = JSON.parse(JSON.stringify(mdBaselines.DEPENDENCIES_FULL));
+                      break;
+    case 'prod':      prodOverrides = {};
+                      if (mdBaselines.PROD_DATA) window.PROD_DATA = JSON.parse(JSON.stringify(mdBaselines.PROD_DATA));
+                      break;
+    case 'demand':    if (mdBaselines.DEMAND_BY_STREAM) window.DEMAND_BY_STREAM = JSON.parse(JSON.stringify(mdBaselines.DEMAND_BY_STREAM));    break;
+    case 'raw':       if (mdBaselines.RAW) window.RAW = JSON.parse(JSON.stringify(mdBaselines.RAW));    break;
+    case 'costs':     if (mdBaselines.COST_DATA) window.COST_DATA = JSON.parse(JSON.stringify(mdBaselines.COST_DATA));    break;
+  }
+  mdSwitchTab(mdActiveTab);
+  if (typeof runScenario === 'function') runScenario();
+}
+
+function mdResetAll() {
+  if (!confirm('Wipe ALL overrides and reload every section from the workbook baseline?\n\nThis will lose every inline lot edit, supplier toggle, prod override, and dep override.')) return;
+  lotOverrides = {};
+  supplierOverrides = {};
+  prodOverrides = {};
+  if (typeof clearAllDepOverrides === 'function') clearAllDepOverrides();
+  if (mdBaselines.PROD_DATA)         window.PROD_DATA         = JSON.parse(JSON.stringify(mdBaselines.PROD_DATA));
+  if (mdBaselines.DEMAND_BY_STREAM)  window.DEMAND_BY_STREAM  = JSON.parse(JSON.stringify(mdBaselines.DEMAND_BY_STREAM));
+  if (mdBaselines.RAW)               window.RAW               = JSON.parse(JSON.stringify(mdBaselines.RAW));
+  if (mdBaselines.COST_DATA)         window.COST_DATA         = JSON.parse(JSON.stringify(mdBaselines.COST_DATA));
+  if (mdBaselines.DEPENDENCIES_FULL) window.DEPENDENCIES_FULL = JSON.parse(JSON.stringify(mdBaselines.DEPENDENCIES_FULL));
+  if (typeof _persistLotOverrides      === 'function') _persistLotOverrides();
+  if (typeof _persistSupplierOverrides === 'function') _persistSupplierOverrides();
+  mdSwitchTab(mdActiveTab);
+  if (typeof runScenario === 'function') runScenario();
+}
 
 // ── SIDEBAR RESIZE ────────────────────────────────────────────────────────
 (function() {
@@ -6758,27 +7336,61 @@ function runCombinedPoolTab() {
   </div>
 </div>
 
-<!-- Master Data Modal — reuses the kpi-drill overlay/modal CSS for consistency -->
+<!-- Master Data Modal — multi-tab editor for every embedded data source -->
 <div id="master-data-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9000;align-items:center;justify-content:center;">
-  <div style="background:var(--card);border-radius:10px;width:min(960px,94vw);max-height:88vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.28);overflow:hidden;border-top:4px solid var(--gold);">
+  <div style="background:var(--card);border-radius:10px;width:min(1180px,96vw);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.28);overflow:hidden;border-top:4px solid var(--gold);">
     <div style="background:var(--navy);color:#fff;padding:12px 18px;display:flex;justify-content:space-between;align-items:center;">
-      <span style="font-size:14px;font-weight:700;">🗃️ Master Data — Dependency Factors</span>
-      <button onclick="closeMasterDataModal()" title="Close" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;line-height:1;padding:0 4px;opacity:0.8;">✕</button>
+      <span style="font-size:14px;font-weight:700;">🗃️ Master Data — <span id="md-section-title">Dependencies</span></span>
+      <button onclick="closeMasterDataModal()" title="Close (Esc)" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;line-height:1;padding:0 4px;opacity:0.8;">✕</button>
     </div>
-    <div style="padding:14px 18px;overflow-y:auto;flex:1;">
-      <p style="font-size:11px;color:var(--muted);margin:0 0 10px;">
-        Multipliers that drive the cascade: parent units × factor = child units consumed. For multi-supplier pairs each row shows its supplier and (if any) active-window. Editing here feeds <code>deriveChildDemand</code> across LP→DP→DS→RM and the Raw Material Cascade tab.
-      </p>
-      <div id="dep-panel" style="font-size:12px;"></div>
-      <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center;">
-        <a href="javascript:void(0)" onclick="clearAllDepOverrides(); renderDepPanel(); runScenario();"
-           style="font-size:11px;color:var(--muted);text-decoration:underline;">
-          reset all to workbook
-        </a>
-        <span id="dep-override-badge" style="font-size:11px;color:var(--gold);font-weight:600;display:none;">● overridden</span>
-      </div>
+    <!-- Tab strip -->
+    <div id="md-tabs" style="display:flex;flex-wrap:wrap;gap:1px;background:var(--border);padding:0;border-bottom:1px solid var(--border);">
+      <button class="md-tab" data-mdtab="deps"      onclick="mdSwitchTab('deps')">🔗 Dependencies</button>
+      <button class="md-tab" data-mdtab="suppliers" onclick="mdSwitchTab('suppliers')">🏭 Suppliers</button>
+      <button class="md-tab" data-mdtab="lots"      onclick="mdSwitchTab('lots')">🧪 Lots</button>
+      <button class="md-tab" data-mdtab="prod"      onclick="mdSwitchTab('prod')">📦 Production</button>
+      <button class="md-tab" data-mdtab="demand"    onclick="mdSwitchTab('demand')">📈 Demand Streams</button>
+      <button class="md-tab" data-mdtab="raw"       onclick="mdSwitchTab('raw')">⚙️ Product Meta</button>
+      <button class="md-tab" data-mdtab="costs"     onclick="mdSwitchTab('costs')">💰 Costs</button>
+    </div>
+    <!-- Toolbar -->
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 18px;background:rgba(26,43,94,0.04);border-bottom:1px solid var(--border);font-size:11px;">
+      <button onclick="mdDownloadCSV()" title="Download current section as CSV"
+              style="font-size:11px;padding:5px 12px;background:#15803d;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;">⬇ Export CSV</button>
+      <label for="md-csv-upload" title="Upload a CSV to replace this section's data (with override layer)"
+             style="font-size:11px;padding:5px 12px;background:var(--navy);color:#fff;border-radius:4px;cursor:pointer;font-weight:600;display:inline-block;">⬆ Import CSV</label>
+      <input type="file" id="md-csv-upload" accept=".csv" style="display:none;" onchange="mdUploadCSV(event)">
+      <button onclick="mdResetTab()" title="Clear overrides for this section and reload from baseline"
+              style="font-size:11px;padding:5px 12px;background:var(--gold);color:var(--navy);border:none;border-radius:4px;cursor:pointer;font-weight:700;">↺ Reset section</button>
+      <span style="flex:1;"></span>
+      <span id="md-section-status" style="color:var(--muted);font-size:11px;"></span>
+      <button onclick="mdResetAll()" title="Wipe overrides across every section and reload from baseline"
+              style="font-size:11px;padding:5px 12px;background:var(--red);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:700;">↺ Reset ALL</button>
+    </div>
+    <!-- Body — populated by mdRender* per tab -->
+    <div id="md-body" style="padding:14px 18px;overflow:auto;flex:1;min-height:0;"></div>
+    <!-- Footer -->
+    <div style="padding:8px 18px;border-top:1px solid var(--border);background:rgba(26,43,94,0.02);font-size:10px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;">
+      <span id="md-footer-summary"></span>
+      <span>Edits persist in localStorage. Reload from workbook via <code>refresh_dashboard.py</code>.</span>
     </div>
   </div>
 </div>
+<style>
+  .md-tab {
+    flex:1; min-width:120px; padding:9px 12px; background:#fff; border:none;
+    border-right:1px solid var(--border); cursor:pointer;
+    font-size:12px; font-weight:600; color:var(--navy);
+    border-bottom:3px solid transparent; transition:all .15s;
+  }
+  .md-tab:hover { background:rgba(218,165,32,0.08); }
+  .md-tab.active { background:rgba(218,165,32,0.12); border-bottom-color:var(--gold); }
+  #md-body table { width:100%; border-collapse:collapse; font-size:11px; }
+  #md-body th { background:var(--navy); color:#fff; text-align:left; padding:5px 8px; font-weight:600; position:sticky; top:0; z-index:1; }
+  #md-body td { padding:4px 8px; border-bottom:1px solid var(--border); }
+  #md-body tr:nth-child(even) td { background:rgba(26,43,94,0.02); }
+  #md-body .md-hint { font-size:11px; color:var(--muted); margin:0 0 10px; padding:6px 10px; background:rgba(218,165,32,0.06); border-left:3px solid var(--gold); border-radius:3px; }
+  #md-body input, #md-body select { font-size:11px; padding:1px 4px; }
+</style>
 </body>
 </html>
