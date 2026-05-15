@@ -3875,8 +3875,25 @@ function updateExpiryTab(product, baseRows, scenRows) {
   // Compute base and scenario runouts via the same FEFO engine so that
   // scen == base → no spurious risk delta (and both use horizon extrapolation
   // to avoid runout fallback to expiry).
+  // Pad scenRows with baseRows' real demand tail when scenRows is shorter
+  // (it usually is — runMRP horizon < PROD_DATA horizon). Without this,
+  // computeFefoScenario extrapolates the scen series past its loaded end
+  // using the trailing-12-month average, which flatlines through periods
+  // where real demand is still growing. Result: for terminal lots
+  // (e.g. PPQ 3), fefoScen reaches the cumulative threshold months later
+  // than fefoBase even when demand for every loaded month matches exactly
+  // — triggering false per-lot scenDivergesFromBase and a spurious "at
+  // scrap risk" reading. Padding eliminates the extrapolation gap.
+  let scenRowsEff = scenRows;
+  if (Array.isArray(baseRows) && Array.isArray(scenRows) && scenRows.length < baseRows.length) {
+    scenRowsEff = scenRows.slice();
+    for (let i = scenRows.length; i < baseRows.length; i++) {
+      const br = baseRows[i];
+      if (br) scenRowsEff.push({ month: br.month, demand: br.demand || 0 });
+    }
+  }
   const fefoBaseChained = computeFefoScenario(product, baseRows);
-  const fefoScen        = computeFefoScenario(product, scenRows);
+  const fefoScen        = computeFefoScenario(product, scenRowsEff);
 
   // ── Live scenario-state diagnostic ──────────────────────────────────────
   // Every input that perturbs scenRows away from baseRows shows here, so any
