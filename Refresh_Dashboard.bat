@@ -8,8 +8,16 @@ echo   GERON DASHBOARD -- REFRESHING...
 echo  ============================================================
 echo.
 
-:: Run the Python script using its full path (works from anywhere)
-python "C:\Users\rholmbeck\OneDrive - Geron Corporation\Documents\Current Files\refresh_dashboard.py"
+:: Prefer the refresh_dashboard.py sitting next to this .bat (relocatable).
+:: Fall back to the original OneDrive location if the local copy is missing.
+set "SCRIPT_LOCAL=%~dp0refresh_dashboard.py"
+set "SCRIPT_LEGACY=C:\Users\rholmbeck\OneDrive - Geron Corporation\Documents\Current Files\refresh_dashboard.py"
+
+if exist "%SCRIPT_LOCAL%" (
+    python "%SCRIPT_LOCAL%"
+) else (
+    python "%SCRIPT_LEGACY%"
+)
 
 :: If Python was not found
 if %ERRORLEVEL% == 9009 (

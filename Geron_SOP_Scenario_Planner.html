@@ -419,26 +419,24 @@
       <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span> 
         📅 View Window <span>▼</span>
       </div>
-      <div class="section-body">
+      <div class="section-body" title="Controls all charts and tables. KPIs reflect the same window.">
         <label>Display months: <span class="val-display" id="view-months-disp">36</span></label>
         <input type="range" id="view-months" min="12" max="180" step="6" value="36"
           oninput="document.getElementById('view-months-disp').textContent=this.value; runScenario()">
-        <div class="info-box" style="margin-top:4px;">Controls all charts and tables. KPIs reflect same window.</div>
       </div>
     </div>
 
     <!-- AGGREGATION PERIOD -->
     <div class="section" draggable="true" data-section-id="aggregation">
-      <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span> 
+      <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span>
         📅 Aggregation Period <span>▼</span>
       </div>
-      <div class="section-body">
+      <div class="section-body" title="Applies to all chart views. Tables always show monthly detail.">
         <div class="toggle-group" style="width:100%">
           <button class="toggle-btn period-btn-monthly active" onclick="setBudgetPeriod('monthly')">Monthly</button>
           <button class="toggle-btn period-btn-quarterly" onclick="setBudgetPeriod('quarterly')">Quarterly</button>
           <button class="toggle-btn period-btn-annual" onclick="setBudgetPeriod('annual')">Annual</button>
         </div>
-        <div class="info-box" style="margin-top:4px;">Applies to all chart views. Tables always show monthly detail.</div>
       </div>
     </div>
 
@@ -463,16 +461,16 @@
           <option>APG</option>
           <option>APT</option>
         </select>
-        <label style="margin-top:8px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+        <label style="margin-top:8px;display:flex;align-items:center;gap:6px;cursor:pointer;"
+               title="Combines inventory for 188mg LP + 200mg DP (or 47mg + 50mg). MOH target becomes 18 mo and production is scheduled jointly against combined stock.">
           <input type="checkbox" id="combine-lp-dp" onchange="runScenario()" style="accent-color:var(--gold);">
           <span style="font-weight:600;">Combine LP + DP</span>
         </label>
-        <div class="info-box" style="margin-top:4px;">Combines inventory for 188mg LP + 200mg DP (or 47mg + 50mg). MOH target becomes 18 mo and production is scheduled jointly against combined stock.</div>
-        <label style="margin-top:8px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+        <label style="margin-top:8px;display:flex;align-items:center;gap:6px;cursor:pointer;"
+               title="When ON (default): 188mg LP + 188mg LP − EU Stock are pooled as one product (same for 47mg). When OFF: each runs separately so the Expiry Risk tab can compare isolated views.">
           <input type="checkbox" id="combine-eu-stock" checked onchange="runScenario()" style="accent-color:var(--gold);">
           <span style="font-weight:600;">Combine EU Stock with parent</span>
         </label>
-        <div class="info-box" style="margin-top:4px;">When ON (default): 188mg LP + 188mg LP - EU Stock are pooled as one product (same for 47mg). When OFF: each runs separately so the Expiry Risk tab can compare isolated views.</div>
       </div>
     </div>
 
@@ -482,18 +480,18 @@
         📈 Demand Scenario <span>▼</span>
       </div>
       <div class="section-body">
-        <label>Sales Factor: <span class="val-display" id="sales-factor-disp">100%</span></label>
+        <label title="Applied uniformly to LP demand only. DS/RM cascade automatically.">Sales Factor: <span class="val-display" id="sales-factor-disp">100%</span></label>
         <input type="range" id="sales-factor" min="50" max="200" step="5" value="100"
-          oninput="document.getElementById('sales-factor-disp').textContent=this.value+'%'; runScenario()">
-        <div class="info-box" style="margin-top:4px;">Applied uniformly to LP demand only. DS/RM cascade automatically.</div>
+          title="Scales scenario LP demand. 100% = workbook baseline. Affects every downstream view."
+          oninput="document.getElementById('sales-factor-disp').textContent=this.value+'%'; _syncCpoolSF(this.value); runScenario(); runCombinedPoolTab && runCombinedPoolTab();">
 
-        <label style="margin-top:10px;display:block;font-weight:600;">Region Filter</label>
+        <label style="margin-top:10px;display:block;font-weight:600;"
+               title="Uncheck a region to remove its demand from the scenario. All on = full combined demand.">Region Filter</label>
         <div id="region-toggles-container" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px;"></div>
-        <div class="info-box" style="margin-top:4px;">Uncheck to remove a region's demand from the scenario. All on = full demand.</div>
 
-        <label style="margin-top:10px;display:block;font-weight:600;">Indication Filter</label>
+        <label style="margin-top:10px;display:block;font-weight:600;"
+               title="Region AND indication must both be checked for a stream to contribute demand.">Indication Filter</label>
         <div id="indication-toggles-container" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px;"></div>
-        <div class="info-box" style="margin-top:4px;">Region AND Indication must both be checked to include a stream.</div>
 
         <label style="margin-top:8px;">Upload Custom Demand Template</label>
         <button onclick="downloadDemandTemplate()" style="width:100%;margin-bottom:6px;padding:7px;background:#005EB8;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;">📥 Download CSV Template</button>
@@ -573,24 +571,71 @@
             oninput="runScenario()">
         </div>
         <div>
-          <label>Batch Size (units/kg)</label>
+          <label style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+            <span>Batch Size (units/kg)</span>
+            <span id="param-batch-size-badge" style="display:none;font-size:9px;font-weight:700;background:#dc2626;color:#fff;border-radius:3px;padding:1px 5px;cursor:pointer;" title="This value is overriding every supplier's batch_size across all products and months. Click to clear."
+                  onclick="document.getElementById('param-batch-size').value=''; this.style.display='none'; runScenario();">OVERRIDING REGISTRY ✕</span>
+          </label>
           <input type="number" id="param-batch-size" value="" min="0" step="1" placeholder="From registry"
-            oninput="runScenario()">
+            oninput="document.getElementById('param-batch-size-badge').style.display = (parseFloat(this.value)>0) ? 'inline-block' : 'none'; runScenario()">
+          <div style="font-size:9px;color:var(--muted);margin-top:2px;">Leave empty to use the active supplier's batch size per the registry timeline.</div>
+        </div>
+        <div>
+          <label style="display:flex;justify-content:space-between;align-items:center">
+            <span>Starting BI (override)</span>
+            <a href="javascript:void(0)" id="param-bi-reset"
+               style="font-size:10px;color:var(--muted);text-decoration:underline;display:none"
+               onclick="(function(){var p=document.getElementById('sel-product').value; clearBIOverride(p); var i=document.getElementById('param-bi-override'); i.value=''; document.getElementById('param-bi-reset').style.display='none'; runScenario();})()">
+              reset
+            </a>
+          </label>
+          <input type="number" id="param-bi-override" value="" min="0" step="1" placeholder="From workbook"
+            oninput="(function(v){var p=document.getElementById('sel-product').value; setBIOverride(p, v===''?null:parseFloat(v)); document.getElementById('param-bi-reset').style.display=(v===''?'none':'inline'); runScenario();})(this.value)">
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">
+            Seeds the scenario simulation; base series unchanged.
+          </div>
         </div>
         <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;"
+                 title="When ON, MRP will not auto-schedule production for any month beyond each product's binding period cutoff. Manual overrides still apply.">
             <input type="checkbox" id="suppress-post-binding" onchange="runScenario()" style="accent-color:var(--gold);">
             <span>Suppress Post-Binding MRP</span>
           </label>
-          <div class="info-box" style="margin-top:4px;">When ON, MRP will not auto-schedule production for any month beyond each product's binding period cutoff. Manual overrides still apply.</div>
         </div>
         <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;"
+                 title="When ON, disables all MRP batch scheduling. Shows straight inventory depletion — when current stock + already-scheduled production runs out against the demand scenario.">
             <input type="checkbox" id="runout-mode" onchange="runScenario()" style="accent-color:var(--red);">
             <span style="color:var(--red);">📉 Runout Mode</span>
           </label>
-          <div class="info-box" style="margin-top:4px;border-color:rgba(249,65,58,0.3);background:rgba(249,65,58,0.05);">When ON, disables all MRP batch scheduling. Shows straight inventory depletion — when current stock + already-scheduled production runs out against the demand scenario.</div>
         </div>
+      </div>
+    </div>
+
+    <!-- SUPPLIERS -->
+    <div class="section" draggable="true" data-section-id="suppliers">
+      <div class="section-header" onclick="toggleSection(this)"
+           title="Toggle active/primary and edit batch size, lead time, or start month. Overrides layer on top of the workbook registry and are GLOBAL — they apply to single-product MRP, multi-tier cascade, and combined LP+DP pool views alike. The '● live' tag marks the supplier scheduling is currently using for today's month."><span class="drag-handle" title="Drag to reorder">⠿</span>
+        🏭 Suppliers <span>▼</span>
+      </div>
+      <div class="section-body">
+        <div id="supplier-panel" style="font-size:11px;"></div>
+        <div style="margin-top:6px;display:flex;justify-content:space-between;align-items:center;">
+          <a href="javascript:void(0)" onclick="clearSupplierOverrides(document.getElementById('sel-product').value); renderSupplierPanel(); runScenario();"
+             style="font-size:10px;color:var(--muted);text-decoration:underline;">
+            reset to workbook
+          </a>
+          <span id="supplier-override-badge" style="font-size:10px;color:var(--gold);font-weight:600;display:none;">● overridden</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- MASTER DATA — opens a modal with dependency factors (and room for more) -->
+    <div class="section" draggable="true" data-section-id="master-data">
+      <div class="section-header" onclick="openMasterDataModal()"
+           title="Open the master-data viewer: dependency factors, supplier registry overrides, and lot inventory in one place.">
+        <span class="drag-handle" title="Drag to reorder">⠿</span>
+        🗃️ Master Data <span style="font-size:11px;color:var(--muted);">▶ open</span>
       </div>
     </div>
 
@@ -864,70 +909,65 @@ Month inventory becomes available after lead time">Release Month</th>
     <div id="tab-expiry" class="tab-content">
       <div class="card">
         <div class="card-header">
-          <div class="card-title" id="title-expiry-chart">FEFO / Expiry Risk Analysis</div>
-          <div class="card-subtitle">Runout vs Expiry — scenario demand shifts lot consumption</div>
+          <div class="card-title" id="title-expiry-chart">FEFO Lot Expiry &amp; Runout Timeline</div>
+          <div class="card-subtitle">Per-lot consumption window (blue) and scrap-risk zone (pink) against expiry — scenario-aware</div>
         </div>
         <!-- Expiry controls row -->
-        <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;padding:8px 0 4px;font-size:11px;">
+        <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:8px 0 4px;font-size:11px;">
           <label style="display:flex;align-items:center;gap:6px;color:var(--navy);font-weight:600;">
-            Short-date buffer:
-            <input type="range" id="expiry-short-date" min="0" max="24" step="1" value="6"
-              style="width:100px" oninput="document.getElementById('expiry-sd-disp').textContent=this.value+' mo'; updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache)">
-            <span id="expiry-sd-disp" style="min-width:36px">6 mo</span>
-            <span style="color:var(--muted);font-weight:400">(shifts effective expiry earlier)</span>
+            Short shelf-life window:
+            <input type="range" id="expiry-short-date" min="1" max="24" step="1" value="6"
+              style="width:120px;accent-color:var(--gold);" oninput="document.getElementById('expiry-sd-disp').textContent=this.value+' mo'; updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache)">
+            <span id="expiry-sd-disp" style="min-width:42px;color:var(--navy);font-weight:700">6 mo</span>
           </label>
-          <label style="display:flex;align-items:center;gap:6px;color:var(--navy);font-weight:600;">
-            View:
-            <select id="expiry-view-months" style="font-size:11px;padding:2px 4px"
-              onchange="updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache)">
-              <option value="24">24 mo</option>
-              <option value="36">36 mo</option>
-              <option value="60">60 mo</option>
-              <option value="120">10 yr</option>
-              <option value="999" selected>All</option>
-            </select>
-          </label>
+          <div style="display:inline-flex;border:1px solid var(--border);border-radius:4px;overflow:hidden;">
+            <button id="expiry-btn-all"  onclick="setExpiryView('all')"  style="font-size:10px;padding:3px 8px;border:none;cursor:pointer;background:var(--navy);color:#fff;">All lots</button>
+            <button id="expiry-btn-risk" onclick="setExpiryView('risk')" style="font-size:10px;padding:3px 8px;border:none;cursor:pointer;background:transparent;color:var(--navy);">At-risk only</button>
+          </div>
+          <button onclick="toggleExpiryAddForm()" style="font-size:10px;padding:3px 8px;cursor:pointer;background:var(--gold);color:var(--navy);border:none;border-radius:4px;font-weight:700;">+ Add lot</button>
+          <a href="javascript:void(0)" onclick="clearLotOverrides(currentProduct); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+             style="font-size:10px;color:var(--muted);text-decoration:underline;margin-left:auto;">reset lots to workbook</a>
+          <span id="expiry-override-badge" style="font-size:10px;color:var(--gold);font-weight:700;display:none;">● lot overrides active</span>
         </div>
-        <div class="chart-container" style="height:220px;">
-          <canvas id="chart-expiry"></canvas>
+        <!-- Inline + Add lot form, toggled by button above -->
+        <div id="expiry-add-form" style="display:none;margin-top:6px;padding:8px 10px;border:1px dashed var(--gold);border-radius:4px;background:rgba(218,165,32,0.05);">
+          <div style="display:grid;grid-template-columns:repeat(5, minmax(0,1fr)) auto;gap:6px;align-items:center;font-size:11px;">
+            <label>Lot ID<br><input id="expiry-add-id"     type="text"   placeholder="lot number"        style="width:100%;font-size:11px;padding:3px;"></label>
+            <label>Qty<br>   <input id="expiry-add-qty"    type="number" min="0" step="1"                style="width:100%;font-size:11px;padding:3px;"></label>
+            <label title="Date of manufacture — lot can't be sold before this date.">DOM<br><input id="expiry-add-dom" type="date" style="width:100%;font-size:11px;padding:3px;"></label>
+            <label>Expiry<br><input id="expiry-add-expiry" type="date"                                   style="width:100%;font-size:11px;padding:3px;"></label>
+            <label>Status<br><select id="expiry-add-status" style="width:100%;font-size:11px;padding:3px;"><option>OK</option><option>On Hold</option><option>At Risk</option></select></label>
+            <button onclick="addLotFromExpiryForm()" style="margin-top:14px;font-size:11px;padding:5px 12px;cursor:pointer;background:var(--navy);color:#fff;border:none;border-radius:3px;font-weight:600;">Add</button>
+          </div>
+        </div>
+        <!-- Live scenario-state diagnostic — surfaces every input that perturbs
+             demand vs. workbook base, so the user can spot which one is causing
+             unexpected runouts/at-risk readings. Computed on every render. -->
+        <div id="expiry-scenario-state" style="margin-top:8px;padding:6px 10px;border:1px solid var(--border);border-radius:4px;background:rgba(26,43,94,0.03);font-size:11px;color:var(--muted);display:flex;flex-wrap:wrap;gap:14px;align-items:center;"></div>
+        <div id="expiry-gantt-wrap" style="margin-top:10px;border:1px solid var(--border);border-radius:6px;background:#fff;padding:10px 8px 6px;overflow-x:auto;">
+          <div id="expiry-gantt" style="min-width:760px;"></div>
         </div>
       </div>
       <div class="card">
-        <div class="card-header"><div class="card-title" id="title-expiry-table">Lot Detail</div></div>
+        <div class="card-header"><div class="card-title" id="title-expiry-table">Lot Detail — inline editable</div></div>
         <div class="table-wrap">
           <table id="tbl-expiry">
             <thead>
               <tr>
-                <th data-tip="Lot number / batch ID">Lot</th>
+                <th data-tip="Lot number / batch ID (locked)">Lot</th>
                 <th data-tip="Product this lot belongs to">Product</th>
-                <th data-tip="Lot status from workbook Lot Inputs tab.
-OK = being consumed normally.
-At Risk = demand will not consume before expiry.
-On Hold = excluded from consumption — deviation hold.">Lot Status</th>
-                <th data-tip="Expiry date of this lot.
-Amber = short-dated (effective expiry shifted earlier by the short-date buffer slider).">Expiry</th>
-                <th data-tip="Base Runout
-Month when baseline demand fully consumes this lot in FEFO order.">Base Runout</th>
-                <th data-tip="Scenario Runout
-Month when scenario demand (sales factor applied) fully consumes this lot.">Scen Runout</th>
-                <th data-tip="Net Available Quantity
-Lot quantity available for consumption (Qty Available minus Reserved).">Avail Qty</th>
-                <th data-tip="Avg Monthly Demand
-Average monthly demand across this lot's consumption window.
-Indicates the burn rate against this lot.">Avg Mo. Demand</th>
-                <th data-tip="Base Risk Qty
-Units still unconsumed by the short-date cutoff under the baseline forecast.
-= MAX(0, cumulative avail − cumulative demand at effective expiry)">Base Risk Qty</th>
-                <th data-tip="Scenario Risk Qty
-Units still unconsumed by the short-date cutoff under the active scenario.">Scen Risk Qty</th>
-                <th data-tip="Status Change
-Whether risk status changed between baseline and scenario.
-⬆ NEW RISK = scenario creates new expiry risk.
-⬇ RESOLVED = scenario reduces or eliminates risk.">Scen Δ</th>
-                <th data-tip="Release By (On Hold lots only)
-The last month to release this On Hold lot and still sell through before effective expiry.
-Computed as: month when cumulative demand (FEFO order, skipping other On Hold lots) would reach this lot's position in the chain — offset back by enough months to consume this lot's qty before expiry.
-Amber = release needed soon (≤3 mo). Red = already past release window.">Release By</th>
+                <th data-tip="Editable. OK = consumed normally; At Risk = demand won't consume before expiry; On Hold = excluded from FEFO consumption.">Lot Status</th>
+                <th data-tip="Editable. Date of manufacture — lot can't be sold before this date. Any FEFO consumption that the chain places before DOM is shown as a yellow production-gap bar on the Gantt above.">DOM</th>
+                <th data-tip="Editable. Expiry date — edits flow through the override layer and rebuild the FEFO chain on the Gantt above.">Expiry</th>
+                <th data-tip="Editable. Net available qty; edits feed FEFO burn and downstream demand cascade.">Avail Qty</th>
+                <th data-tip="Base Runout — month baseline demand fully consumes this lot in FEFO order.">Base Runout</th>
+                <th data-tip="Scenario Runout — month scenario demand consumes this lot.">Scen Runout</th>
+                <th data-tip="Avg monthly demand across this lot's consumption window.">Avg Mo. Demand</th>
+                <th data-tip="Units still unconsumed by short-date cutoff under baseline.">Base Risk Qty</th>
+                <th data-tip="Units still unconsumed by short-date cutoff under scenario.">Scen Risk Qty</th>
+                <th data-tip="⬆ NEW RISK = scenario creates new risk. ⬇ RESOLVED = scenario reduces risk.">Scen Δ</th>
+                <th data-tip="Release By (On Hold only) — last month to release the lot and still sell through before effective expiry.">Release By</th>
+                <th data-tip="Remove this lot from the FEFO chain.">✕</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -1049,7 +1089,7 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
           <div style="display:flex;flex-direction:column;gap:4px;min-width:140px;">
             <label style="font-size:11px;font-weight:600;color:var(--muted);">Sales Factor: <span id="cpool-sf-disp">100%</span></label>
             <input type="range" id="cpool-sf" min="50" max="200" step="5" value="100"
-              oninput="document.getElementById('cpool-sf-disp').textContent=this.value+'%'; runCombinedPoolTab()"
+              oninput="document.getElementById('cpool-sf-disp').textContent=this.value+'%'; _syncMainSF(this.value); runScenario(); runCombinedPoolTab();"
               style="width:160px;">
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;min-width:120px;">
@@ -1619,12 +1659,53 @@ function _depsRowsFor(parent, child) {
   return DEPENDENCIES_FULL[`${parent}||${child}`] || [];
 }
 
-function _lookupDepFactor(parent, child, monthIso, supplier) {
+// ── DEPENDENCY FACTOR OVERRIDES ─────────────────────────────────────────────
+// depOverrides[parent||child][rowIndex] = { factor: number }
+// Layered on the canonical row before _lookupDepFactor's filter/selection.
+let depOverrides = {};
+try { depOverrides = JSON.parse(localStorage.getItem('geron_dep_overrides') || '{}'); } catch (e) { depOverrides = {}; }
+function _persistDepOverrides() {
+  try { localStorage.setItem('geron_dep_overrides', JSON.stringify(depOverrides)); } catch (e) {}
+}
+function getDepOverride(parent, child, rowIdx) {
+  const key = `${parent}||${child}`;
+  return (depOverrides[key] && depOverrides[key][rowIdx]) || null;
+}
+function setDepOverride(parent, child, rowIdx, factor) {
+  const key = `${parent}||${child}`;
   const rows = _depsRowsFor(parent, child);
-  if (!rows.length) {
+  const reg = rows[rowIdx];
+  if (!depOverrides[key]) depOverrides[key] = {};
+  if (reg && typeof factor === 'number' && Math.abs(factor - reg.factor) < 1e-12) {
+    delete depOverrides[key][rowIdx];
+  } else {
+    depOverrides[key][rowIdx] = { factor };
+  }
+  if (Object.keys(depOverrides[key]).length === 0) delete depOverrides[key];
+  _persistDepOverrides();
+}
+function clearDepOverridesForPair(parent, child) {
+  delete depOverrides[`${parent}||${child}`];
+  _persistDepOverrides();
+}
+function clearAllDepOverrides() {
+  depOverrides = {};
+  _persistDepOverrides();
+}
+function _effectiveDepRow(parent, child, rowIdx, row) {
+  const ov = getDepOverride(parent, child, rowIdx);
+  if (!ov) return row;
+  return Object.assign({}, row, ov);
+}
+
+function _lookupDepFactor(parent, child, monthIso, supplier) {
+  const rawRows = _depsRowsFor(parent, child);
+  if (!rawRows.length) {
     // fallback to DEPENDENCIES flat map
     return (typeof DEPENDENCIES !== 'undefined' && DEPENDENCIES) ? (DEPENDENCIES[child] || 0) : 0;
   }
+  // Overlay overrides per row index
+  const rows = rawRows.map((r, i) => _effectiveDepRow(parent, child, i, r));
   // Prefer supplier-specific match active for this month
   const supRows = rows.filter(r => r.supplier === supplier);
   const generalRows = rows.filter(r => !r.supplier);
@@ -1687,10 +1768,16 @@ function getBaseRows(product) {
 
 // SCENARIO rows — baseline merged with any uploaded customStreams
 function getScenarioRows(product) {
-  const rows = _buildRows(product, getMergedStreams());
+  let rows = _buildRows(product, getMergedStreams());
   // For DP products: offset demand by lead time
-  if (product === '200mg DP') return applyDPLeadTimeOffset(rows, '188mg LP');
-  if (product === '50mg DP')  return applyDPLeadTimeOffset(rows, '47mg LP');
+  if (product === '200mg DP') rows = applyDPLeadTimeOffset(rows, '188mg LP');
+  else if (product === '50mg DP') rows = applyDPLeadTimeOffset(rows, '47mg LP');
+  // Apply starting-BI override (first row only — chain propagates from there)
+  const biOv = getBIOverride(product);
+  if (biOv !== null && rows.length) {
+    rows = rows.slice();
+    rows[0] = Object.assign({}, rows[0], { bi: biOv });
+  }
   return rows;
 }
 
@@ -1704,9 +1791,209 @@ function getMeta(product) {
 // ══════════════════════════════════════════════════════════════════════════════
 let prodOverrides = {};  // { "200mg DP": { "2026-06-01": 0, "2026-09-01": 1 }, ... }
 
+// ── STARTING BI OVERRIDES ────────────────────────────────────────────────────
+// Per-product override applied to the first-month BI of the scenario series.
+// Base series stays as workbook truth so the user can see the delta. Persisted
+// to localStorage so refreshes don't blow away active what-ifs.
+let biOverrides = {};
+try {
+  biOverrides = JSON.parse(localStorage.getItem('geron_bi_overrides') || '{}');
+} catch (e) { biOverrides = {}; }
+
+function getBIOverride(product) {
+  return Object.prototype.hasOwnProperty.call(biOverrides, product)
+    ? biOverrides[product] : null;
+}
+function setBIOverride(product, value) {
+  if (value === null || value === undefined || value === '' || !isFinite(value)) {
+    delete biOverrides[product];
+  } else {
+    biOverrides[product] = Number(value);
+  }
+  try { localStorage.setItem('geron_bi_overrides', JSON.stringify(biOverrides)); } catch (e) {}
+}
+function clearBIOverride(product) {
+  delete biOverrides[product];
+  try { localStorage.setItem('geron_bi_overrides', JSON.stringify(biOverrides)); } catch (e) {}
+}
+
+// ── SUPPLIER TOGGLE OVERRIDES ───────────────────────────────────────────────
+// supplierOverrides[product][supplier] = { manual_toggle: 0|1, primary: 0|1 }
+// Layered on top of SUPPLIER_REGISTRY so the workbook stays canonical. A field
+// only counts as "overridden" if it's present; missing fields fall through to
+// the registry value. Persisted to localStorage.
+let supplierOverrides = {};
+try {
+  supplierOverrides = JSON.parse(localStorage.getItem('geron_supplier_overrides') || '{}');
+} catch (e) { supplierOverrides = {}; }
+
+function _persistSupplierOverrides() {
+  try { localStorage.setItem('geron_supplier_overrides', JSON.stringify(supplierOverrides)); } catch (e) {}
+}
+function getSupplierOverride(product, supplier) {
+  return (supplierOverrides[product] && supplierOverrides[product][supplier]) || null;
+}
+// Find the registry row for a supplier by name (for minimization).
+function _supplierRegistryRow(product, supplier) {
+  const rows = _srRowsFor(product);
+  return rows.find(r => r.supplier === supplier) || null;
+}
+// Apply a patch, then drop fields that equal the registry value (so badges
+// reflect "actually different from workbook") and drop empty entries.
+function setSupplierOverride(product, supplier, patch) {
+  if (!supplierOverrides[product]) supplierOverrides[product] = {};
+  const merged = Object.assign({}, supplierOverrides[product][supplier] || {}, patch);
+  const reg = _supplierRegistryRow(product, supplier);
+  if (reg) {
+    Object.keys(merged).forEach(k => {
+      // Treat numeric-ish equality loosely; null/'' treated as equal.
+      const a = merged[k], b = reg[k];
+      const eq = (a === b) || (a == null && b == null) || (a === '' && b == null)
+              || (typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 1e-9)
+              || (String(a) === String(b));
+      if (eq) delete merged[k];
+    });
+  }
+  if (Object.keys(merged).length === 0) {
+    delete supplierOverrides[product][supplier];
+    if (Object.keys(supplierOverrides[product]).length === 0) delete supplierOverrides[product];
+  } else {
+    supplierOverrides[product][supplier] = merged;
+  }
+  _persistSupplierOverrides();
+}
+function clearSupplierOverrides(product) {
+  delete supplierOverrides[product];
+  _persistSupplierOverrides();
+}
+// Return a shallow merge of registry row + override. Doesn't mutate the registry.
+function _effectiveSupplierRow(product, row) {
+  const ov = getSupplierOverride(product, row.supplier);
+  if (!ov) return row;
+  return Object.assign({}, row, ov);
+}
+
+// ── LOT INVENTORY OVERRIDES ─────────────────────────────────────────────────
+// lotOverrides[product][lot_id] is either:
+//   { _deleted: true }                                — hide this lot
+//   { _added: true, expiry, avail, status, seq }      — new lot inserted by user
+//   { avail?, expiry?, status? }                      — partial patch on registry lot
+// _effectiveFEFOLots() produces a merged flat array that callers use in place
+// of raw FEFO_LOTS. Persisted in localStorage as geron_lot_overrides.
+let lotOverrides = {};
+try {
+  lotOverrides = JSON.parse(localStorage.getItem('geron_lot_overrides') || '{}');
+} catch (e) { lotOverrides = {}; }
+
+function _persistLotOverrides() {
+  try { localStorage.setItem('geron_lot_overrides', JSON.stringify(lotOverrides)); } catch (e) {}
+}
+function getLotOverride(product, lotId) {
+  return (lotOverrides[product] && lotOverrides[product][lotId]) || null;
+}
+function _registryLot(product, lotId) {
+  return FEFO_LOTS.find(l => l.product === product && l.lot === lotId) || null;
+}
+// Patch a single field; auto-minimize against registry; clean up empty entries.
+function setLotOverride(product, lotId, patch) {
+  if (!lotOverrides[product]) lotOverrides[product] = {};
+  const cur = lotOverrides[product][lotId] || {};
+  const isAdded = cur._added === true;
+  const merged = Object.assign({}, cur, patch);
+  if (!isAdded && !merged._deleted) {
+    const reg = _registryLot(product, lotId);
+    if (reg) {
+      ['avail','expiry','status'].forEach(k => {
+        if (merged[k] === undefined) return;
+        const a = merged[k], b = reg[k];
+        const eq = (a === b)
+                || (typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 1e-9)
+                || (String(a) === String(b));
+        if (eq) delete merged[k];
+      });
+    }
+  }
+  // Drop empty patches
+  if (!isAdded && !merged._deleted && Object.keys(merged).length === 0) {
+    delete lotOverrides[product][lotId];
+  } else {
+    lotOverrides[product][lotId] = merged;
+  }
+  if (Object.keys(lotOverrides[product]).length === 0) delete lotOverrides[product];
+  _persistLotOverrides();
+}
+function deleteLot(product, lotId) {
+  if (!lotOverrides[product]) lotOverrides[product] = {};
+  const cur = lotOverrides[product][lotId];
+  if (cur && cur._added) {
+    delete lotOverrides[product][lotId];
+  } else {
+    lotOverrides[product][lotId] = { _deleted: true };
+  }
+  if (Object.keys(lotOverrides[product]).length === 0) delete lotOverrides[product];
+  _persistLotOverrides();
+}
+function addNewLot(product, fields) {
+  if (!lotOverrides[product]) lotOverrides[product] = {};
+  // Auto-assign seq one past the highest existing (registry + added)
+  const allSeqs = _effectiveFEFOLots()
+    .filter(l => l.product === product).map(l => l.seq || 0);
+  const nextSeq = (allSeqs.length ? Math.max(...allSeqs) : 0) + 1;
+  const lotId = fields.lot;
+  lotOverrides[product][lotId] = Object.assign({
+    _added: true, product, lot: lotId, seq: nextSeq, runout: null,
+    cumAvail: 0, risk: 0, release_deadline: null, days_to_release: null,
+  }, fields);
+  _persistLotOverrides();
+}
+function clearLotOverrides(product) {
+  if (product) {
+    delete lotOverrides[product];
+  } else {
+    // No arg → clear everything (used by the Reset-all path on the empty state)
+    lotOverrides = {};
+  }
+  _persistLotOverrides();
+}
+function clearAllLotOverrides() {
+  lotOverrides = {};
+  _persistLotOverrides();
+}
+// Layered, full flat lot list. Use this everywhere instead of raw FEFO_LOTS.
+function _effectiveFEFOLots() {
+  const out = [];
+  for (const row of FEFO_LOTS) {
+    const ov = (lotOverrides[row.product] && lotOverrides[row.product][row.lot]) || null;
+    if (ov && ov._deleted) continue;
+    out.push(ov ? Object.assign({}, row, ov) : row);
+  }
+  // Append _added lots
+  for (const prod of Object.keys(lotOverrides)) {
+    for (const lotId of Object.keys(lotOverrides[prod])) {
+      const entry = lotOverrides[prod][lotId];
+      if (entry && entry._added) out.push(Object.assign({}, entry));
+    }
+  }
+  return out;
+}
+
 function getProdOverride(product, month) {
   return (prodOverrides[product] && prodOverrides[product][month] !== undefined)
     ? prodOverrides[product][month] : null;
+}
+// Shared resolver: effective production qty for product/month, taking the
+// override layer into account. `committed` is the baseline (PROD_DATA) units.
+// `batchSize` converts an override (stored as batch count) back to units.
+function getEffectiveProd(product, monthIso, batchSize, committed) {
+  const raw = prodOverrides[product] ? prodOverrides[product][monthIso] : undefined;
+  if (raw === undefined) return { units: committed || 0, fromOverride: false, cancelled: false };
+  const units = raw * (batchSize || 1);
+  return { units, fromOverride: true, cancelled: raw === 0 };
+}
+// True iff this month's production was explicitly cancelled (override set to 0)
+// — distinct from "no production scheduled" (no override, baseline = 0).
+function isProdCancelled(product, monthIso) {
+  return prodOverrides[product] && prodOverrides[product][monthIso] === 0;
 }
 
 function setProdOverride(product, month, batches) {
@@ -1852,7 +2139,7 @@ function _srRowsFor(product) {
 //      ("use whichever is newer")
 // Returns null if no supplier matches.
 function getActiveSupplier(product, monthIso) {
-  const rows = _srRowsFor(product);
+  const rows = _srRowsFor(product).map(r => _effectiveSupplierRow(product, r));
   if (!rows.length) return null;
   const cands = rows.filter(r => {
     if (r.manual_toggle !== 1) return false;
@@ -2013,23 +2300,18 @@ function runMRP(baseRows, salesFactor, meta, horizonMonths, product) {
 
     // ── GATES (scenario-only) ──────────────────────────────────────────────
     let scenProd = batchQty;
+    const eff    = product ? getEffectiveProd(product, monthIso, batchSize, 0) : { units: 0, fromOverride: false, cancelled: false };
 
-    // Runout mode: no MRP at all; only manual overrides
     if (runoutMode) {
-      const ov = (product && prodOverrides[product])
-        ? prodOverrides[product][monthIso] : undefined;
-      scenProd = (ov !== undefined) ? ov * (batchSize || 1) : 0;
+      // Runout mode: no MRP at all; only manual overrides
+      scenProd = eff.fromOverride ? eff.units : 0;
     } else {
       // Suppress post-binding: zero out MRP-suggested production once past binding
-      if (suppressPostBinding && bindingThrough && monthIso >= bindingThrough) {
-        const ov = (product && prodOverrides[product])
-          ? prodOverrides[product][monthIso] : undefined;
-        if (ov === undefined) scenProd = 0;
+      if (suppressPostBinding && bindingThrough && monthIso >= bindingThrough && !eff.fromOverride) {
+        scenProd = 0;
       }
-      // Manual production override (units = count × active batch size)
-      const ov = (product && prodOverrides[product])
-        ? prodOverrides[product][monthIso] : undefined;
-      if (ov !== undefined) scenProd = ov * (batchSize || 1);
+      // Manual production override (units = count × active batch size) wins
+      if (eff.fromOverride) scenProd = eff.units;
     }
 
     // Binding period: production is whatever PROD_DATA / base scheduled. We
@@ -2059,6 +2341,8 @@ function runMRP(baseRows, salesFactor, meta, horizonMonths, product) {
       batches:    batchSize > 0 ? Math.round(scenProd / batchSize) : 0,
       supplier:   params.supplier,
       leadTime:   leadTime,
+      cancelled:  eff.cancelled,           // true iff prodOverride=0 explicitly
+      committed:  base.prod || 0,          // what PROD_DATA said (for delta display)
     });
   }
   return result;
@@ -2120,40 +2404,164 @@ function applySupplyMode(product, rows, salesFactor) {
 //  FEFO SCENARIO — recalculate runout dates based on scenario demand
 // ══════════════════════════════════════════════════════════════════════════════
 function computeFefoScenario(product, scenRows) {
-  const lots = FEFO_LOTS.filter(l => l.product === product)
+  const lots = _effectiveFEFOLots().filter(l => l.product === product)
     .sort((a,b) => a.seq - b.seq);
   if (!lots.length) return [];
 
-  // Build cumulative scenario demand map
+  // Build cumulative scenario demand map, then extrapolate beyond the loaded
+  // horizon using avg-of-last-12-months. Without this, lots whose cumulative
+  // threshold falls past the horizon end would collapse to expiry — making the
+  // Gantt bar run from chain-start to expiry (huge) and tripping spurious
+  // "NEW RISK" status when the short-shelf-life slider shifts effective expiry.
   const cumDemand = {};
+  const sortedRows = (scenRows || []).slice().sort((a,b) => a.month.localeCompare(b.month));
   let cum = 0;
-  for (const r of scenRows) {
-    cum += r.demand;
+  for (const r of sortedRows) {
+    cum += (r.demand || 0);
     cumDemand[r.month] = cum;
   }
-  const months = scenRows.map(r => r.month);
+  const totalAvail = lots.reduce((s,l) => s + (l.avail || 0), 0);
+  if (sortedRows.length) {
+    const tail = sortedRows.slice(-12);
+    const avgDemand = tail.reduce((s,r) => s + (r.demand || 0), 0) / tail.length;
+    if (avgDemand > 0) {
+      // Extrapolate forward month-by-month until we cover total available qty
+      // with a generous safety margin, or hit a hard date stop.
+      let cursor = new Date(sortedRows[sortedRows.length - 1].month);
+      const stopYear = 2060;
+      const stopCum  = totalAvail * 1.5 + avgDemand; // safety buffer
+      while (cum < stopCum && cursor.getFullYear() < stopYear) {
+        cursor.setMonth(cursor.getMonth() + 1);
+        const m = cursor.toISOString().slice(0,7) + '-01';
+        cum += avgDemand;
+        cumDemand[m] = cum;
+      }
+    }
+  }
+  const months = Object.keys(cumDemand).sort();
+  // Lookup: cumulative demand at or before the given month (clamped).
+  function cumDemandAt(iso) {
+    const m = (iso || '').slice(0,10);
+    if (!months.length) return 0;
+    if (m <= months[0])  return cumDemand[months[0]] || 0;
+    if (m >= months[months.length-1]) return cumDemand[months[months.length-1]] || 0;
+    // Binary search would be fine; data is small enough for linear scan.
+    let last = 0;
+    for (const k of months) {
+      if (k > m) break;
+      last = cumDemand[k] || last;
+    }
+    return last;
+  }
 
   const result = [];
   let cumulativeConsumed = 0;
+  let prevCumulative = 0;
   for (const lot of lots) {
-    cumulativeConsumed += lot.avail;
-    // Find first month where cumulative demand >= cumulative consumed
-    let runout = lot.expiry.slice(0,7) + '-01';
-    for (const m of months) {
-      if ((cumDemand[m] || 0) >= cumulativeConsumed) {
-        runout = m; break;
+    // On Hold lots are excluded from FEFO consumption — matches the workbook
+    // semantics (cumAvail: 0 on On Hold rows). Skipping them keeps base
+    // baseRunout/baseRisk aligned with the workbook's precomputed values.
+    const isHold = (lot.status === 'On Hold');
+    prevCumulative = cumulativeConsumed;
+    if (!isHold) cumulativeConsumed += (lot.avail || 0);
+
+    let consumeStart = null;
+    let runout       = null;
+    if (isHold) {
+      // Theoretical placeholder: lot is never consumed under FEFO. Downstream
+      // (buildLotRows) replaces baseRunout/scenRunout with effExp for On Hold.
+      consumeStart = (lot.expiry || '').slice(0,7) + '-01';
+      runout       = consumeStart;
+    } else {
+      for (const m of months) {
+        const cd = cumDemand[m] || 0;
+        if (consumeStart === null && cd >= prevCumulative) consumeStart = m;
+        if (cd >= cumulativeConsumed) { runout = m; break; }
       }
+      if (!consumeStart) consumeStart = months[0] || (lot.expiry || '').slice(0,7) + '-01';
+      if (!runout)       runout       = (lot.expiry || '').slice(0,7) + '-01';
     }
-    const expDt  = new Date(lot.expiry.slice(0,10));
+
+    const expDt  = new Date((lot.expiry || '').slice(0,10));
     const runDt  = new Date(runout);
     const isRisk = runDt > expDt;
+    // scenRisk = unconsumed portion of THIS lot at the lot's actual expiry.
+    // Risk qty AT A SLIDER-ADJUSTED cutoff is computed by the caller using
+    // cumDemandAt(effExp); see updateExpiryTab.
+    const expMonth = (lot.expiry || '').slice(0,7) + '-01';
+    const cumAtExp = cumDemandAt(expMonth);
+    const unconsumed = Math.max(0, cumulativeConsumed - cumAtExp);
+    const scenRisk   = Math.min(lot.avail || 0, Math.round(unconsumed));
+
     result.push({
       ...lot,
+      consumeStart,
       scenRunout: runout,
-      scenRisk:   isRisk ? lot.avail : 0,
+      prevCum:    prevCumulative,
+      lotCum:     cumulativeConsumed,
+      scenRisk,
       scenStatus: isRisk ? 'At Risk' : 'OK',
     });
   }
+  // Attach lookup as an array property — preserves [i] indexing for callers.
+  result.cumDemandAt = cumDemandAt;
+
+  // ── Pass 2: DOM-aware chaining ────────────────────────────────────────────
+  // A lot can't ship before its date of manufacture. If FEFO demand reaches a
+  // lot before its DOM, demand goes unmet during the gap, and that lot's own
+  // consumption window slides right. The slide cascades to subsequent lots:
+  // each lot starts at max(prevLot's revised runout, this lot's DOM).
+  function findFirstMonthAtCum(target, fromMonth) {
+    for (const m of months) {
+      if (fromMonth && m < fromMonth) continue;
+      if ((cumDemand[m] || 0) >= target) return m;
+    }
+    return months[months.length - 1] || null;
+  }
+  let supplyCursor = months[0] || null;
+  for (const lot of result) {
+    const isHold = (lot.status === 'On Hold');
+    if (isHold) {
+      // On Hold lots are out of the FEFO chain — they don't consume demand
+      // and don't advance the supply cursor for the next lot.
+      lot.effectiveStart = null;
+      lot.gapStart = null; lot.gapEnd = null; lot.gapQty = 0;
+      continue;
+    }
+    // Default: keep pass-1's chain (which now matches the workbook because
+    // On Hold lots are excluded from cumulativeConsumed). Only override when
+    // a DOM gate or a cascading supply delay actually shifts effective start
+    // — otherwise we'd introduce an off-by-one-month error vs. the workbook.
+    const naturalStart = lot.consumeStart;
+    let effStart      = (naturalStart && naturalStart > supplyCursor) ? naturalStart : supplyCursor;
+    const cascaded    = (supplyCursor && naturalStart && supplyCursor > naturalStart);
+    let gated         = false;
+    if (lot.dom && lot.dom > effStart) {
+      lot.gapStart = effStart;
+      lot.gapEnd   = lot.dom;
+      // Gap qty = demand DURING the gap window [effStart .. dom)
+      lot.gapQty   = Math.max(0, Math.round(cumDemandAt(lot.dom) - cumDemandAt(effStart)));
+      effStart     = lot.dom;
+      gated        = true;
+    } else {
+      lot.gapStart = null;
+      lot.gapEnd   = null;
+      lot.gapQty   = 0;
+    }
+    lot.effectiveStart = effStart;
+    if (gated || cascaded) {
+      // Shift actually happened — recompute runout from the shifted start.
+      // cumDemandAt(effStart) covers all months ≤ effStart, so we add lot.avail
+      // ON TOP of demand already consumed up through effStart. This drifts vs.
+      // pass-1 by at most one month, which is acceptable when a gate is forcing
+      // the shift anyway.
+      const targetCum = cumDemandAt(effStart) + (lot.avail || 0);
+      lot.scenRunout  = findFirstMonthAtCum(targetCum, effStart) || lot.scenRunout;
+    }
+    // else: keep pass-1's scenRunout — exact workbook alignment, no drift.
+    supplyCursor = lot.scenRunout;
+  }
+
   return result;
 }
 
@@ -2554,13 +2962,27 @@ function runScenario() {
       prod: r.compProd || 0,
     }));
 
-    // Update sidebar params to reflect combined targets
+    // Reflect combined targets in sidebar — but only on transition into combine
+    // mode. Re-writing on every runScenario() clobbers what the user just typed,
+    // since oninput fires this function on every keystroke. We snapshot the
+    // user's per-product values on entry and restore them on exit.
     const tMOHEl = document.getElementById('param-target-moh');
     const cMOHEl = document.getElementById('param-critical-moh');
-    if (tMOHEl) tMOHEl.value = COMBINED_TARGET_MOH;
-    if (cMOHEl) cMOHEl.value = COMBINED_CRITICAL_MOH;
+    if (!window._combineActive) {
+      // entering combined mode: stash + apply combined targets, disable inputs
+      window._preCombineTarget   = tMOHEl ? tMOHEl.value : '';
+      window._preCombineCritical = cMOHEl ? cMOHEl.value : '';
+      if (tMOHEl) { tMOHEl.value = COMBINED_TARGET_MOH;   tMOHEl.disabled = true; tMOHEl.title = 'Combined pool uses 18mo target — uncheck Combine LP+DP to edit'; }
+      if (cMOHEl) { cMOHEl.value = COMBINED_CRITICAL_MOH; cMOHEl.disabled = true; cMOHEl.title = 'Combined pool uses 16mo critical — uncheck Combine LP+DP to edit'; }
+    }
 
     updateProductTitles(product + ' + ' + companion);
+  } else if (window._combineActive) {
+    // exiting combined mode: restore the user's pre-combine values and re-enable
+    const tMOHEl = document.getElementById('param-target-moh');
+    const cMOHEl = document.getElementById('param-critical-moh');
+    if (tMOHEl) { tMOHEl.disabled = false; tMOHEl.title = ''; if (window._preCombineTarget   !== undefined && window._preCombineTarget   !== '') tMOHEl.value = window._preCombineTarget; }
+    if (cMOHEl) { cMOHEl.disabled = false; cMOHEl.title = ''; if (window._preCombineCritical !== undefined && window._preCombineCritical !== '') cMOHEl.value = window._preCombineCritical; }
   }
 
   // Expose for production table companion column
@@ -2645,6 +3067,10 @@ function runScenario() {
   updateExpiryTab(product, displayBRows.concat(baseRows.slice(horizon)), fullScenDemand);
   updateValuationTab(product, displayBRows, displaySRows);
   renderRunwayTab();
+  // Combined Pool reads SUPPLIER_REGISTRY + prodOverrides + sales factor + lot
+  // data, so every scenario re-run must also refresh it — otherwise supplier
+  // edits, lot changes, or factor moves in other tabs leave cpool stale.
+  if (typeof runCombinedPoolTab === 'function') runCombinedPoolTab();
 }
 
 
@@ -2988,10 +3414,13 @@ function updateProductionTab(product, baseRows, scenRows, meta) {
     const compCell = compProd !== null
       ? `<td style="color:var(--muted);font-style:italic;">${compProd > 0 ? fmt(compProd) : '—'}</td>`
       : `<td style="display:none;"></td>`;
+    const cancelBadge = s.cancelled
+      ? ' <span style="font-size:9px;font-weight:700;background:#dc2626;color:#fff;border-radius:3px;padding:1px 5px;">CANCELLED</span>'
+      : '';
     tbody.innerHTML += `<tr>
       <td>${monthLabel(b.month)}</td>
       <td>${fmt(Math.round(b.prod/bSize))}</td><td>${fmt(b.prod)}</td>
-      <td>${fmt(Math.round(s.prod/bSize))}</td><td>${fmt(s.prod)}</td>
+      <td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmt(Math.round(s.prod/bSize))}</td><td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmt(s.prod)}${cancelBadge}</td>
       ${compCell}
       <td class="${dB>0?'diff-pos':dB<0?'diff-neg':'diff-neu'}">${dB>0?'+':''}${dB}</td>
       <td class="${dU>0?'diff-pos':dU<0?'diff-neg':'diff-neu'}">${dU>0?'+':''}${fmt(dU)}</td>
@@ -3429,15 +3858,123 @@ function updateExpiryTab(product, baseRows, scenRows) {
   // Expiry tab shows ONLY the selected product's lots
   const inactiveLPProduct = null;  // never inject companion product
 
-  const fefoBase = FEFO_LOTS.filter(l => l.product === product)
-    .sort((a,b) => (a.expiry||'').localeCompare(b.expiry||''));
+  const fefoBase = _effectiveFEFOLots().filter(l => l.product === product)
+    .sort((a,b) => (a.seq || 0) - (b.seq || 0));
   const fefoInactive = [];
-  const fefoScen = computeFefoScenario(product, scenRows);
+  // Compute base and scenario runouts via the same FEFO engine so that
+  // scen == base → no spurious risk delta (and both use horizon extrapolation
+  // to avoid runout fallback to expiry).
+  // Pad scenRows with baseRows' real demand tail when scenRows is shorter
+  // (it usually is — runMRP horizon < PROD_DATA horizon). Without this,
+  // computeFefoScenario extrapolates the scen series past its loaded end
+  // using the trailing-12-month average, which flatlines through periods
+  // where real demand is still growing. Result: for terminal lots
+  // (e.g. PPQ 3), fefoScen reaches the cumulative threshold months later
+  // than fefoBase even when demand for every loaded month matches exactly
+  // — triggering false per-lot scenDivergesFromBase and a spurious "at
+  // scrap risk" reading. Padding eliminates the extrapolation gap.
+  let scenRowsEff = scenRows;
+  if (Array.isArray(baseRows) && Array.isArray(scenRows) && scenRows.length < baseRows.length) {
+    scenRowsEff = scenRows.slice();
+    for (let i = scenRows.length; i < baseRows.length; i++) {
+      const br = baseRows[i];
+      if (br) scenRowsEff.push({ month: br.month, demand: br.demand || 0 });
+    }
+  }
+  const fefoBaseChained = computeFefoScenario(product, baseRows);
+  const fefoScen        = computeFefoScenario(product, scenRowsEff);
+
+  // ── Live scenario-state diagnostic ──────────────────────────────────────
+  // Every input that perturbs scenRows away from baseRows shows here, so any
+  // unexpected at-risk reading on the Gantt/table has a discoverable cause.
+  const _stateEl = document.getElementById('expiry-scenario-state');
+  if (_stateEl) {
+    const sfVal       = parseInt(document.getElementById('sales-factor')?.value || 100);
+    const euCombineEl = document.getElementById('combine-eu-stock');
+    const euCombineOn = euCombineEl ? !!euCombineEl.checked : true;
+    const supMode     = (typeof supplyMode !== 'undefined') ? supplyMode : 'normal';
+    const lpCombine   = document.getElementById('combine-lp-dp')?.checked || false;
+    const pbsOv       = parseFloat(document.getElementById('param-batch-size')?.value);
+    const pbsActive   = pbsOv > 0;
+    const customs     = (typeof customStreams === 'object' && customStreams)
+                         ? Object.keys(customStreams).length : 0;
+    const prodOvCount = Object.keys(prodOverrides[product] || {}).length;
+    const lotOvCount  = Object.keys(lotOverrides[product]  || {}).length;
+    const supOvCount  = Object.keys(supplierOverrides[product] || {}).length;
+    const regions     = (typeof getActiveRegions === 'function') ? getActiveRegions() : null;
+    const indications = (typeof getActiveIndications === 'function') ? getActiveIndications() : null;
+    // Compare against the known full lists so "Regions: EU,US" doesn't look
+    // bold/filtered when both regions actually IS the full set.
+    const knownRegions = (typeof getKnownRegions === 'function') ? getKnownRegions() : null;
+    const knownInds    = (typeof getKnownIndications === 'function') ? getKnownIndications() : null;
+    const regionsAllOn = (regions === null) || (Array.isArray(knownRegions) && regions.length === knownRegions.length);
+    const indsAllOn    = (indications === null) || (Array.isArray(knownInds) && indications.length === knownInds.length);
+    // Tally cumDemand difference between base and scen — surfaces hidden drift
+    let demandDelta = 0;
+    let maxAbsMonthlyDelta = 0;
+    let monthlyDiffCount   = 0;
+    if (Array.isArray(baseRows) && Array.isArray(scenRows)) {
+      const n = Math.min(baseRows.length, scenRows.length);
+      for (let i = 0; i < n; i++) {
+        const d = (scenRows[i]?.demand||0) - (baseRows[i]?.demand||0);
+        demandDelta += d;
+        if (Math.abs(d) > 0.001) monthlyDiffCount++;
+        if (Math.abs(d) > maxAbsMonthlyDelta) maxAbsMonthlyDelta = Math.abs(d);
+      }
+    }
+    // Per-lot divergence audit — show lots whose fefoBase.scenRunout differs
+    // from fefoScen.scenRunout even though demand should match. This catches
+    // computed-runout drift that the netted demandDelta would hide.
+    const divergedLots = [];
+    for (let i = 0; i < fefoBaseChained.length; i++) {
+      const b = fefoBaseChained[i], s = fefoScen[i];
+      if (b && s && b.scenRunout !== s.scenRunout) divergedLots.push(`${b.lot}: ${b.scenRunout} vs ${s.scenRunout}`);
+    }
+    const chip = (label, val, neutral) => `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="font-weight:600;color:var(--navy);">${label}:</span> <span style="color:${neutral?'var(--muted)':'var(--navy)'};font-weight:${neutral?'400':'700'};">${val}</span></span>`;
+    const flag = (cond, label) => cond ? `<span style="display:inline-flex;align-items:center;gap:4px;color:#d97706;font-weight:700;">⚠ ${label}</span>` : '';
+    _stateEl.innerHTML = [
+      chip('Spotlight', product, true),
+      chip('Sales Factor', sfVal + '%', sfVal === 100),
+      chip('EU combine', euCombineOn ? 'ON' : 'OFF (separated)', euCombineOn),
+      chip('LP+DP combine', lpCombine ? 'ON' : 'OFF', !lpCombine),
+      chip('Supply mode', supMode, supMode === 'normal'),
+      chip('Regions', regionsAllOn ? 'All' : (regions||[]).join(','), regionsAllOn),
+      chip('Indications', indsAllOn ? 'All' : ((indications||[]).length + ' selected'), indsAllOn),
+      chip('Custom streams', customs, customs === 0),
+      chip('Lot overrides', lotOvCount, lotOvCount === 0),
+      chip('Prod overrides', prodOvCount, prodOvCount === 0),
+      chip('Supplier overrides', supOvCount, supOvCount === 0),
+      pbsActive ? flag(true, 'Batch-size override active (' + pbsOv + ')') : '',
+      chip('scen − base cum-demand', (demandDelta >= 0 ? '+' : '') + Math.round(demandDelta).toLocaleString() + (monthlyDiffCount ? ` (${monthlyDiffCount} mo differ, max |Δ|=${maxAbsMonthlyDelta.toFixed(2)})` : ''), Math.abs(demandDelta) < 1 && monthlyDiffCount === 0),
+      divergedLots.length
+        ? `<span style="color:#dc2626;font-weight:700;" title="${divergedLots.join('\n')}">⚠ ${divergedLots.length} lot(s) base≠scen runout</span>`
+        : `<span style="color:var(--muted);">No per-lot divergence</span>`,
+    ].filter(Boolean).join('');
+  }
 
   if (!fefoBase.length) {
+    // Diagnose: is the workbook's seed empty for this product, or has the
+    // override layer hidden everything (e.g. stale _deleted flags from a
+    // prior session in localStorage)?
+    const rawCount = (typeof FEFO_LOTS !== 'undefined')
+      ? FEFO_LOTS.filter(l => l.product === product).length
+      : 0;
+    const ovHidden = rawCount > 0;  // workbook has rows but they're masked
+    const msg = ovHidden
+      ? `Workbook has ${rawCount} lot${rawCount===1?'':'s'} for ${product}, but your local overrides are hiding them all (likely <code>_deleted</code> entries from a prior session).`
+      : `No workbook lots seeded for ${product}.`;
+    const resetBtn = ovHidden
+      ? `<button onclick="if(confirm('Clear ALL lot overrides (every product) and reload from the workbook? Your inline edits, deletes, and added lots will be lost.')) { clearAllLotOverrides(); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario(); }"
+           style="margin-top:8px;font-size:11px;padding:5px 12px;background:var(--red);color:#fff;border:none;border-radius:3px;font-weight:700;cursor:pointer;">↺ Reset ALL lot overrides to workbook</button>`
+      : '';
     document.querySelector('#tbl-expiry tbody').innerHTML =
-      '<tr><td colspan="12" class="empty-state">No lot data for this product.</td></tr>';
-    destroyChart('chart-expiry');
+      `<tr><td colspan="14" class="empty-state" style="text-align:center;padding:24px;">
+         <div style="margin-bottom:8px;">${msg}</div>
+         <div style="font-size:11px;color:var(--muted);">Use "+ Add lot" above to seed a fresh one${ovHidden ? ', or wipe overrides:' : '.'}</div>
+         ${resetBtn}
+       </td></tr>`;
+    const ghost = document.getElementById('expiry-gantt');
+    if (ghost) ghost.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-style:italic;">${ovHidden ? 'All lots hidden by local overrides — see the table below for a reset option.' : 'No lots to render.'}</div>`;
     return;
   }
 
@@ -3529,99 +4066,103 @@ function updateExpiryTab(product, baseRows, scenRows) {
     const releaseByDate = new Date(effExpDate);
     releaseByDate.setMonth(releaseByDate.getMonth() - Math.ceil(moToConsume));
 
-    return releaseByDate;
+    const startConsumeMonth = startConsumeIdx >= 0 ? rows[startConsumeIdx].month : null;
+    return {
+      date:             releaseByDate,
+      effExp,
+      cumBefore,
+      startConsumeMonth,
+      avgDem,
+      moToConsume,
+      windowMonths:     windowRows.length,
+      lotAvail:         lot.avail,
+    };
   }
 
   // Build display lots — active product first, then inactive product (all at risk)
   function buildLotRows(lotList, forceAtRisk, lotProduct) {
     return lotList.map((lot, i) => {
       const effExp     = effectiveExpiry(lot.expiry);       // short-date adjusted
-      const lotStatus  = lot.status || 'OK';                // from workbook: OK/At Risk/On Hold
+      const lotStatus  = lot.status || 'OK';
       const isOnHold   = lotStatus === 'On Hold';
-      const scenLot    = lotProduct === product ? fefoScen[i] : null;
+      const baseLot    = lotProduct === product ? fefoBaseChained[i] : null;
+      const scenLot    = lotProduct === product ? fefoScen[i]        : null;
 
-      // On Hold: never consumed — demand doesn't run through it
-      // forceAtRisk: inactive supply mode product — no demand at all
+      // Trust the workbook for the BASE view. lot.runout and lot.risk are
+      // precomputed values exported with the planner — live demand recompute
+      // can drift from them (the workbook's runouts implicitly assume a
+      // demand growth curve that may not exactly match what's loaded in
+      // PROD_DATA today). Showing live-computed values as the "base" would
+      // confuse the user, who reads the workbook as truth.
+      //
+      // For SCENARIO: only diverge from the workbook when the live demand
+      // model says scenario differs from base (e.g. sales-factor moved, prod
+      // override added, lot edited). When scen == base, scenRunout falls
+      // back to the workbook so no spurious "NEW RISK" appears.
       const baseRunout = (isOnHold || forceAtRisk) ? effExp : (lot.runout || lot.expiry);
-      const scenRunout = (isOnHold || forceAtRisk) ? effExp : (scenLot?.scenRunout || lot.expiry);
+      // Did the live demand model diverge between base and scenario?
+      const scenDivergesFromBase = baseLot && scenLot
+        && baseLot.scenRunout !== scenLot.scenRunout;
+      const scenRunout = (isOnHold || forceAtRisk) ? effExp
+        : (scenDivergesFromBase ? (scenLot?.scenRunout || lot.expiry)
+                                : (lot.runout || lot.expiry));
+      const effectiveStart = (isOnHold || forceAtRisk) ? null : (scenLot?.effectiveStart || baseLot?.effectiveStart || null);
+      const consumeStart   = (isOnHold || forceAtRisk) ? null : (scenLot?.consumeStart   || baseLot?.consumeStart   || null);
+      // Production gap (from scenario chain — base will usually match)
+      const gapStart = scenLot?.gapStart || null;
+      const gapEnd   = scenLot?.gapEnd   || null;
+      const gapQty   = scenLot?.gapQty   || 0;
 
-      // BOTH base and scenario risk compared against same threshold (effExp)
-      // so Status Δ shows genuine scenario impact, not threshold mismatch
+      // Risk: trust the workbook for the BASE flag/qty. For SCEN, use
+      // workbook unless the scenario actually diverges; then use computed
+      // (clamp lot.avail − cumDemandAt(effExp) against lotCum).
       const bRisk = new Date(baseRunout) > new Date(effExp);
       const sRisk = new Date(scenRunout) > new Date(effExp);
       const baseRisk = (isOnHold || forceAtRisk) ? lot.avail : (lot.risk || 0);
-      const scenRisk = (isOnHold || forceAtRisk) ? lot.avail : (scenLot?.scenRisk || 0);
-      const statusDelta = bRisk === sRisk ? '—'
-        : (!bRisk && sRisk) ? '⬆ NEW RISK' : '⬇ RESOLVED';
+      const scenRiskComputed = (scenLot && fefoScen.cumDemandAt)
+        ? Math.min(lot.avail, Math.max(0, (scenLot.lotCum || 0) - fefoScen.cumDemandAt(effExp)))
+        : 0;
+      const scenRisk = (isOnHold || forceAtRisk) ? lot.avail
+        : (scenDivergesFromBase ? scenRiskComputed : (lot.risk || 0));
+      // Δ tied to qty (not just boolean) so cosmetic month-boundary differences
+      // when scen==base don't trip "NEW RISK qty 0".
+      let statusDelta = '—';
+      if (scenRisk > baseRisk + 0.5)      statusDelta = '⬆ NEW RISK';
+      else if (baseRisk > scenRisk + 0.5) statusDelta = '⬇ RESOLVED';
 
       const monthlyDemand = (isOnHold || forceAtRisk) ? 0
-        : avgDemandForLot(lotProduct, lot.runout, baseRunout);
-      const expiresWithinView = viewMo >= 999
-        || new Date(effExp) <= new Date(addMonths(new Date().toISOString().slice(0,10), viewMo));
+        : avgDemandForLot(lotProduct, consumeStart || baseRunout, baseRunout);
 
-      // Release By — only for On Hold lots
+      // Release By — only for On Hold lots — capture full justification for tooltip
       let releaseBy = null;
+      let releaseByInfo = null;
       if (isOnHold && !forceAtRisk) {
-        releaseBy = computeReleaseBy(lotList, i, lotProduct, false);
+        releaseByInfo = computeReleaseBy(lotList, i, lotProduct, false);
+        releaseBy = releaseByInfo?.date || null;
       }
 
       return { lot: lot.lot, product: lotProduct, expiry: lot.expiry, effExp,
+               dom: lot.dom || null,
                lotStatus, isOnHold, forceAtRisk,
-               baseRunout, scenRunout, avail: lot.avail,
+               baseRunout, scenRunout, consumeStart, effectiveStart, avail: lot.avail,
+               gapStart, gapEnd, gapQty,
                baseRisk, scenRisk, bRisk, sRisk, statusDelta,
-               monthlyDemand, expiresWithinView, releaseBy };
-    }).filter(l => viewMo >= 999 || l.expiresWithinView);
+               monthlyDemand, releaseBy, releaseByInfo };
+    });
   }
 
   const lots = buildLotRows(fefoBase, inactiveProduct, product);
 
-  // (lot rows built above via buildLotRows)
+  // Override badge
+  const obEl = document.getElementById('expiry-override-badge');
+  if (obEl) obEl.style.display = (lotOverrides[product] && Object.keys(lotOverrides[product]).length) ? 'inline' : 'none';
 
-  // Chart
-  const barColors = lots.map(l =>
-    l.isOnHold   ? 'rgba(245,158,11,0.55)' :
-    l.bRisk      ? 'rgba(249,65,58,0.70)'  :
-    'rgba(26,122,64,0.65)'
-  );
-  const borderColors = lots.map(l =>
-    l.isOnHold ? '#d97706' : l.bRisk ? '#b91c1c' : '#15803d'
-  );
+  // Gantt
+  renderExpiryGantt(product, lots, { shortDateMo });
 
-  destroyChart('chart-expiry');
-  charts['chart-expiry'] = new Chart(
-    document.getElementById('chart-expiry'), {
-      type: 'bar',
-      data: {
-        labels: lots.map(l => l.lot.slice(-10)),
-        datasets: [
-          { label:'Available Qty', data: lots.map(l=>l.avail),
-            backgroundColor: barColors, borderColor: borderColors,
-            borderWidth: lots.map(l => l.isOnHold ? 2 : 1),
-            borderDash: [], borderRadius: 3 },
-          { label:'Scen At-Risk', data: lots.map(l=>l.scenRisk),
-            backgroundColor:'rgba(255,163,0,0.55)', borderRadius:3 },
-        ],
-      },
-      options: { responsive:true, maintainAspectRatio:false,
-        plugins:{
-          legend:{position:'top',labels:{font:{size:11}}},
-          tooltip:{callbacks:{
-            afterTitle: items => {
-              const lot = lots[items[0].dataIndex];
-              const lines = [`Exp: ${lot.effExp}${shortDateMo ? ' (short-dated −'+shortDateMo+' mo)' : ''}`];
-              if (lot.isOnHold) lines.push('⚠ On Hold');
-              if (inactiveProduct) lines.push('⚠ No demand — inactive supply mode');
-              return lines.join('\n');
-            }
-          }}
-        },
-        scales:{ x:{ticks:{font:{size:9}}}, y:{ticks:{font:{size:10}},beginAtZero:true} }
-      }
-    }
-  );
-
-  // Table
+  // Inline-editable table
   const tbody = document.querySelector('#tbl-expiry tbody');
+  const safe = s => String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;');
   tbody.innerHTML = lots.map(l => {
     const rowStyle = l.isOnHold
       ? 'background:rgba(245,158,11,0.10);border-left:3px solid #f59e0b'
@@ -3630,25 +4171,37 @@ function updateExpiryTab(product, baseRows, scenRows) {
         : l.bRisk || l.sRisk
           ? 'background:rgba(249,65,58,0.04)'
           : '';
+    const ovEntry  = getLotOverride(l.product, l.lot);
+    const isAdded  = !!(ovEntry && ovEntry._added);
+    const isMod    = !!(ovEntry && !ovEntry._added && !ovEntry._deleted);
+    const lotLabelCell = `<td style="font-family:monospace;font-size:11px;${(isAdded||isMod) ? 'border-left:2px solid var(--gold);padding-left:6px;' : ''}">${l.lot}${isAdded ? ' <span style=\"font-size:8px;color:var(--gold);font-weight:700;\">NEW</span>' : ''}</td>`;
     const inactiveBadge = l.forceAtRisk && l.product !== product
       ? ' <span style="font-size:9px;background:#dc2626;color:white;border-radius:3px;padding:1px 4px">no demand</span>'
       : '';
-    // Lot Status badge
-    const statusColor = l.lotStatus === 'On Hold'  ? '#f59e0b'
-                      : l.lotStatus === 'At Risk'   ? '#dc2626'
-                      : '#15803d';
-    const statusBadge = `<span style="font-size:9px;font-weight:700;background:${statusColor};color:white;border-radius:3px;padding:1px 5px">${l.lotStatus}</span>`;
-    const effExpDisplay = shortDateMo
-      ? `<span style="color:#d97706;font-weight:600">${l.effExp.slice(0,10)}</span> <span style="font-size:9px;color:var(--muted)">(orig: ${l.expiry.slice(0,10)})</span>`
-      : l.expiry.slice(0,10);
+    const statusColor = l.lotStatus === 'On Hold' ? '#f59e0b'
+                      : l.lotStatus === 'At Risk' ? '#dc2626' : '#15803d';
+    const statusCell = `<td><select onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{status: this.value}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+        style="font-size:10px;padding:2px 4px;color:${statusColor};font-weight:700;background:transparent;border:1px solid ${statusColor}33;border-radius:3px;">
+        ${['OK','On Hold','At Risk'].map(s => `<option value="${s}" ${s===l.lotStatus?'selected':''}>${s}</option>`).join('')}
+      </select></td>`;
+    const expCell = `<td><input type="date" value="${(l.expiry||'').slice(0,10)}"
+        onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{expiry: this.value}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+        style="font-size:10px;padding:1px 3px;width:120px;">${shortDateMo ? `<div style="font-size:9px;color:#d97706;">eff: ${l.effExp.slice(0,10)}</div>` : ''}</td>`;
+    const hasGap   = l.dom && l.consumeStart && l.dom > l.consumeStart;
+    const domColor = hasGap ? '#d97706' : 'inherit';
+    const domCell = `<td><input type="date" value="${(l.dom||'').slice(0,10)}"
+        onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{dom: this.value || null}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+        style="font-size:10px;padding:1px 3px;width:120px;color:${domColor};${hasGap?'font-weight:700;':''}">${hasGap ? `<div title="FEFO chain wants this lot by ${l.consumeStart.slice(0,7)} but it isn\'t manufactured until ${l.dom.slice(0,7)} — yellow production gap shown on the Gantt." style="font-size:9px;color:#d97706;">⚠ gap: needs ${l.consumeStart.slice(0,7)}</div>` : ''}</td>`;
+    const qtyCell = `<td style="text-align:right;"><input type="number" min="0" step="1" value="${l.avail}"
+        onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{avail: parseFloat(this.value)||0}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+        style="font-size:10px;padding:1px 3px;width:80px;text-align:right;"></td>`;
     const demandDisplay = l.monthlyDemand > 0
       ? fmt(l.monthlyDemand, 0)
       : (l.isOnHold || l.forceAtRisk) ? '<span style="color:#dc2626;font-style:italic">none</span>' : '—';
     const deltaColor = l.statusDelta === '⬆ NEW RISK' ? '#b91c1c'
                      : l.statusDelta === '⬇ RESOLVED' ? '#15803d' : 'inherit';
 
-    // Release By cell — On Hold only
-    let releaseByCell = '<td style="color:var(--muted);font-style:italic;font-size:10px">—</td>';
+    let releaseByCell = '<td></td>';
     if (l.isOnHold && l.releaseBy) {
       const today = new Date();
       const rb = l.releaseBy;
@@ -3660,26 +4213,262 @@ function updateExpiryTab(product, baseRows, scenRows) {
         : moUntil <= 3
           ? `<span style="font-size:9px;background:#d97706;color:white;border-radius:3px;padding:1px 4px;margin-left:4px">SOON</span>`
           : '';
-      releaseByCell = `<td style="color:${rbColor};font-weight:700;white-space:nowrap">${rbStr}${rbLabel}</td>`;
-    } else if (!l.isOnHold) {
-      releaseByCell = '<td></td>';
+      // Build the calculation justification for the tooltip
+      const info = l.releaseByInfo;
+      let tipLines = ['Release By calculation:'];
+      if (info) {
+        tipLines.push(`1. Effective expiry = ${info.effExp}`);
+        tipLines.push(`2. Cumulative qty in FEFO lots ahead of this one = ${fmt(info.cumBefore,0)} units`);
+        tipLines.push(`3. Demand reaches that cum threshold at ${info.startConsumeMonth || '(beyond horizon)'} — so this lot would START consuming then`);
+        tipLines.push(`4. Avg monthly demand over the next ${info.windowMonths} months = ${fmt(info.avgDem,0)} units/mo`);
+        tipLines.push(`5. Months needed to consume this lot's ${fmt(info.lotAvail,0)} units = ${fmt(info.lotAvail,0)} ÷ ${fmt(info.avgDem,0)} = ${info.moToConsume.toFixed(1)} mo`);
+        tipLines.push(`6. Release By = effective expiry − ⌈${info.moToConsume.toFixed(1)}⌉ months = ${rbStr}`);
+        if (moUntil < 0) tipLines.push(`⚠ Already past — releasing now no longer leaves enough sell-through window before expiry.`);
+        else if (moUntil <= 3) tipLines.push(`⚠ Release window closes in ${moUntil} mo.`);
+      }
+      const tip = tipLines.join('\n');
+      releaseByCell = `<td title="${tip.replace(/"/g,'&quot;')}" style="color:${rbColor};font-weight:700;white-space:nowrap;cursor:help;text-decoration:underline dotted ${rbColor};">${rbStr}${rbLabel}</td>`;
     }
 
+    const delCell = `<td style="text-align:center;"><button title="Delete lot" onclick="deleteLot('${safe(l.product)}','${safe(l.lot)}'); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+        style="font-size:12px;background:none;border:none;color:var(--red);cursor:pointer;">✕</button></td>`;
+
     return `<tr style="${rowStyle}">
-      <td>${l.lot}</td>
+      ${lotLabelCell}
       <td>${l.product}${inactiveBadge}</td>
-      <td>${statusBadge}</td>
-      <td>${effExpDisplay}</td>
+      ${statusCell}
+      ${domCell}
+      ${expCell}
+      ${qtyCell}
       <td>${l.baseRunout.slice(0,7)}</td>
       <td>${l.scenRunout.slice(0,7)}</td>
-      <td style="text-align:right">${fmt(l.avail,0)}</td>
       <td style="text-align:right;color:var(--muted)">${demandDisplay}</td>
       <td style="text-align:right;color:${l.bRisk?'#b91c1c':'inherit'}">${l.bRisk?fmt(l.baseRisk,0):'—'}</td>
       <td style="text-align:right;color:${l.sRisk?'#b91c1c':'inherit'}">${l.sRisk?fmt(l.scenRisk,0):'—'}</td>
       <td style="font-weight:700;color:${deltaColor}">${l.statusDelta}</td>
       ${releaseByCell}
+      ${delCell}
     </tr>`;
   }).join('');
+}
+
+// ── Expiry Gantt (per-lot timeline, scenario-aware) ─────────────────────────
+let expiryView = 'all';     // 'all' | 'risk'
+function setExpiryView(name) {
+  expiryView = name;
+  const a = document.getElementById('expiry-btn-all');
+  const r = document.getElementById('expiry-btn-risk');
+  if (a && r) {
+    const on  = 'background:var(--navy);color:#fff;';
+    const off = 'background:transparent;color:var(--navy);';
+    a.style.cssText = 'font-size:10px;padding:3px 8px;border:none;cursor:pointer;' + (name==='all'  ? on : off);
+    r.style.cssText = 'font-size:10px;padding:3px 8px;border:none;cursor:pointer;' + (name==='risk' ? on : off);
+  }
+  updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache);
+}
+function toggleExpiryAddForm() {
+  const el = document.getElementById('expiry-add-form');
+  if (el) el.style.display = (el.style.display === 'none') ? '' : 'none';
+}
+function addLotFromExpiryForm() {
+  const product = currentProduct;
+  const lot     = (document.getElementById('expiry-add-id').value || '').trim();
+  const avail   = parseFloat(document.getElementById('expiry-add-qty').value);
+  const dom     = document.getElementById('expiry-add-dom').value || null;
+  const expiry  = document.getElementById('expiry-add-expiry').value;
+  const status  = document.getElementById('expiry-add-status').value || 'OK';
+  if (!lot)          { alert('Lot id required'); return; }
+  if (!(avail >= 0)) { alert('Qty required (>= 0)'); return; }
+  if (!expiry)       { alert('Expiry date required'); return; }
+  if (dom && dom > expiry) { alert('DOM must be on or before Expiry'); return; }
+  if (_effectiveFEFOLots().some(l => l.product === product && l.lot === lot)) {
+    alert('Lot id "' + lot + '" already exists for ' + product); return;
+  }
+  addNewLot(product, { lot, avail, dom, expiry, status });
+  document.getElementById('expiry-add-id').value = '';
+  document.getElementById('expiry-add-qty').value = '';
+  document.getElementById('expiry-add-dom').value = '';
+  document.getElementById('expiry-add-expiry').value = '';
+  document.getElementById('expiry-add-status').value = 'OK';
+  document.getElementById('expiry-add-form').style.display = 'none';
+  updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache);
+  runScenario();
+}
+
+function _addMonthsIso(iso, n) {
+  const d = new Date(iso);
+  d.setMonth(d.getMonth() + n);
+  return d.toISOString().slice(0,10);
+}
+
+function renderExpiryGantt(product, lots, opts) {
+  const host = document.getElementById('expiry-gantt');
+  if (!host) return;
+  const filtered = (expiryView === 'risk') ? lots.filter(l => l.bRisk || l.sRisk) : lots;
+  if (!filtered.length) {
+    host.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted);font-style:italic;">No lots match the current view.</div>';
+    return;
+  }
+  const shortDateMo = opts?.shortDateMo || 6;
+
+  // Time axis: span from a bit before the earliest start to a bit after the latest expiry.
+  const today = new Date().toISOString().slice(0,10);
+  const allDates = [];
+  for (const l of filtered) {
+    if (l.scenRunout) allDates.push(l.scenRunout);
+    if (l.baseRunout) allDates.push(l.baseRunout);
+    if (l.expiry)     allDates.push(l.expiry);
+  }
+  allDates.push(today);
+  const tMinIso = _addMonthsIso(allDates.reduce((a,b)=>a<b?a:b), -3);
+  const tMaxIso = _addMonthsIso(allDates.reduce((a,b)=>a>b?a:b),  3);
+  const tMin = new Date(tMinIso).getTime();
+  const tMax = new Date(tMaxIso).getTime();
+  const tSpan = Math.max(1, tMax - tMin);
+  const pct = iso => Math.max(0, Math.min(100, (new Date(iso).getTime() - tMin) / tSpan * 100));
+
+  // Build year + month gridlines
+  const yStart = new Date(tMinIso).getFullYear();
+  const yEnd   = new Date(tMaxIso).getFullYear();
+  const years  = []; for (let y = yStart; y <= yEnd; y++) years.push(y);
+  const months = [];
+  let g = new Date(tMinIso); g.setDate(1);
+  const gEnd = new Date(tMaxIso);
+  while (g <= gEnd) { months.push(g.toISOString().slice(0,10)); g.setMonth(g.getMonth()+1); }
+  const minorLines = months.map(m => {
+    const x = pct(m);
+    return (m.slice(5) === '01-01') ? '' : `<line x1="${x}%" y1="0" x2="${x}%" y2="100%" stroke="var(--navy)" stroke-width="0.6" opacity="0.08"/>`;
+  }).join('');
+  const majorLines = years.map(y => `<line x1="${pct(y+'-01-01')}%" y1="0" x2="${pct(y+'-01-01')}%" y2="100%" stroke="var(--navy)" stroke-width="1" opacity="0.20"/>`).join('');
+  const yearLabels = years.map(y => `<div style="position:absolute;left:${pct(y+'-07-01')}%;transform:translateX(-50%);font-size:10px;font-weight:700;color:var(--navy);top:2px;">${y}</div>`).join('');
+  const todayX = pct(today);
+
+  // Render in input (seq) order; consumeStart comes from the FEFO engine so
+  // each blue bar represents the *actual* consumption window for that lot
+  // under current/scenario demand — no ad-hoc chaining here.
+
+  const sorted = filtered.slice();
+
+  // Visual chain — each lot's blue bar starts where the previous OK lot's
+  // displayed runout ended (so bars chain end-to-end, no overlaps and no
+  // gaps). DOM gates and cascading supply delays still override when active.
+  // Without this, the bar START used the computed FEFO chain while the bar
+  // END used workbook scenRunout, and the two drift apart for later lots
+  // because workbook runouts assume different demand growth than PROD_DATA.
+  const visualStarts = {};
+  let chainCursor = today;
+  for (const l of sorted) {
+    if (l.isOnHold || l.forceAtRisk) {
+      visualStarts[l.lot] = today;  // bar not drawn for these
+      continue;
+    }
+    // Anchor each lot to where the previous one's bar ended (= its displayed
+    // scenRunout). DOM, if set later than the cursor, supersedes.
+    let vs = (chainCursor < today) ? today : chainCursor;
+    if (l.dom && l.dom > vs) vs = l.dom;
+    // Don't let bars start past their own runout (sliver edge case)
+    const endIso = l.scenRunout || l.expiry;
+    if (endIso && vs > endIso) vs = endIso;
+    visualStarts[l.lot] = vs;
+    if (endIso) chainCursor = endIso;
+  }
+
+  const LABEL_W = 110;
+  const ROW_H   = 30;
+
+  const rowsHtml = sorted.map((l, i) => {
+    const runout     = l.scenRunout || l.expiry;
+    const expIso     = l.expiry;
+    const riskCutoff = _addMonthsIso(expIso, -shortDateMo);
+    // visualStart comes from the sequential chain above so each lot's bar
+    // begins exactly where the previous lot's bar ended.
+    const visualStart = visualStarts[l.lot] || today;
+    const hasGap      = !!(l.gapStart && l.gapEnd && l.gapEnd > l.gapStart && l.gapEnd > today);
+    const gapFrom     = hasGap ? (l.gapStart < today ? today : l.gapStart) : null;
+    const gapTo       = hasGap ? l.gapEnd : null;
+    const gapQty      = hasGap ? (l.gapQty || 0) : 0;
+    const dynRisk     = new Date(runout) > new Date(riskCutoff);
+
+    // Quantity split: portion consumed by riskCutoff vs portion at scrap risk
+    // (= scenRisk, the unconsumed remainder at expiry).
+    const riskQty  = Math.min(l.avail, Math.max(0, l.scenRisk));
+    const safeQty  = Math.max(0, l.avail - riskQty);
+
+    const blueLeft  = pct(visualStart);
+    const blueRight = pct(dynRisk ? riskCutoff : runout);
+    const blueW     = Math.max(0.3, blueRight - blueLeft);
+    const pinkLeft  = pct(riskCutoff);
+    const pinkRight = pct(runout);
+    const pinkW     = Math.max(0, pinkRight - pinkLeft);
+    const expX      = pct(expIso);
+    const cutoffX   = pct(riskCutoff);
+    const stripeBg  = (i%2===0) ? 'rgba(26,43,94,0.02)' : 'transparent';
+
+    const blueColor   = l.isOnHold ? '#f59e0b' : (dynRisk ? '#dc2626' : '#1a2b5e');
+    const blueOpacity = l.isOnHold ? 0.55 : 0.78;
+    const blueExtra   = l.isOnHold ? ';border:1px dashed #d97706' : '';
+
+    const statusBadge = `<span style="font-size:8px;font-weight:700;background:${l.isOnHold?'#f59e0b':(dynRisk?'#dc2626':'#15803d')};color:#fff;border-radius:2px;padding:0 4px;margin-left:4px;">${l.lotStatus}</span>`;
+
+    // Always show qty labels to the right of the bar — consistent regardless
+    // of bar width. Format: "X consumed · Y at scrap risk" (risk part shown
+    // only when dynRisk).
+    const safeLabel = l.isOnHold ? 'On Hold' : `${fmt(safeQty,0)} consumed`;
+    const riskLabel = `${fmt(riskQty,0)} at scrap risk`;
+    const labelText = l.isOnHold
+      ? safeLabel
+      : (dynRisk ? `${safeLabel} · ${riskLabel}` : safeLabel);
+    const labelLeft = Math.min(99, (dynRisk ? pinkRight : blueRight) + 0.5);
+    const externalLabel = `<div style="position:absolute;left:${labelLeft}%;top:-1px;font-size:9px;color:var(--navy);font-weight:600;z-index:6;pointer-events:none;white-space:nowrap;">${labelText}</div>`;
+
+    const barTooltip = l.isOnHold
+      ? `On Hold — not consumed; see Release By in the table`
+      : `Consume ${visualStart.slice(0,7)} → ${(dynRisk?riskCutoff:runout).slice(0,7)}\n${fmt(safeQty,0)} units consumed before short-date cutoff${dynRisk ? `\n${fmt(riskQty,0)} units at scrap risk (cutoff → expiry)` : ''}\nTotal lot qty: ${fmt(l.avail,0)}`;
+
+    return `
+      <div style="display:flex;align-items:center;height:${ROW_H}px;background:${stripeBg};border-bottom:1px solid rgba(26,43,94,0.06);">
+        <div style="width:${LABEL_W}px;min-width:${LABEL_W}px;font-size:10px;color:var(--navy);text-align:right;padding-right:8px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex-shrink:0;">
+          <span style="font-family:monospace;">${l.lot}</span>${statusBadge}
+        </div>
+        <div style="flex:1;position:relative;height:14px;">
+          ${hasGap ? `<div title="Production gap ${gapFrom.slice(0,7)} → ${gapTo.slice(0,7)} (${Math.round((new Date(gapTo) - new Date(gapFrom)) / (1000*60*60*24*30.44))} mo)&#10;${fmt(gapQty,0)} units of demand have no supply during this window.&#10;Fill from another lot or pull production forward."
+               style="position:absolute;left:${pct(gapFrom)}%;width:${Math.max(0.3, pct(gapTo) - pct(gapFrom))}%;height:100%;background:repeating-linear-gradient(45deg,#facc15,#facc15 4px,#fde68a 4px,#fde68a 8px);border:1px solid #ca8a04;border-radius:2px;opacity:0.95;z-index:1;"></div>
+          <div style="position:absolute;left:${pct(gapFrom)}%;width:${Math.max(0.3, pct(gapTo) - pct(gapFrom))}%;top:0;height:100%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#7c2d12;z-index:6;pointer-events:none;white-space:nowrap;overflow:hidden;">${fmt(gapQty,0)} short</div>` : ''}
+          <div title="${barTooltip}"
+               style="position:absolute;left:${blueLeft}%;width:${blueW}%;height:100%;background:${blueColor};border-radius:2px;opacity:${blueOpacity};z-index:2${blueExtra};"></div>
+          ${dynRisk && pinkW>0 ? `<div title="Scrap-risk window ${riskCutoff.slice(0,7)} → ${runout.slice(0,7)} · ${fmt(riskQty,0)} units"
+               style="position:absolute;left:${pinkLeft}%;width:${pinkW}%;height:100%;background:#f9a8d4;border-radius:0 2px 2px 0;opacity:0.85;z-index:3;"></div>` : ''}
+          ${externalLabel}
+          ${dynRisk ? `<div style="position:absolute;left:${cutoffX}%;top:-4px;width:2px;height:22px;background:#dc2626;transform:translateX(-50%);z-index:4;"></div>` : ''}
+          <div style="position:absolute;left:${expX}%;top:-4px;width:2px;height:22px;background:#1a2b5e;transform:translateX(-50%);z-index:4;"></div>
+          <div style="position:absolute;left:${expX}%;top:-14px;transform:translateX(-50%);font-size:8px;font-weight:700;color:#1a2b5e;z-index:5;">exp</div>
+        </div>
+      </div>`;
+  }).join('');
+
+  const totalH = ROW_H * sorted.length;
+  host.innerHTML = `
+    <div style="position:relative;padding-top:22px;">
+      <div style="position:relative;height:22px;margin-left:${LABEL_W}px;">${yearLabels}</div>
+      <div style="position:relative;">
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;left:${LABEL_W}px;top:0;width:calc(100% - ${LABEL_W}px);height:${totalH}px;pointer-events:none;">
+          ${majorLines}${minorLines}
+          <line x1="${todayX}%" y1="0" x2="${todayX}%" y2="100%" stroke="#6b7280" stroke-width="1" stroke-dasharray="2 2"/>
+        </svg>
+        ${rowsHtml}
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:6px;padding-left:${LABEL_W}px;">
+        <span>${tMinIso.slice(0,7)}</span><span>today</span><span>${tMaxIso.slice(0,7)}</span>
+      </div>
+      <div style="display:flex;gap:14px;font-size:10px;color:var(--muted);margin-top:6px;flex-wrap:wrap;">
+        <span><span style="display:inline-block;width:14px;height:8px;background:#1a2b5e;opacity:0.78;border-radius:2px;vertical-align:middle;"></span> consumption window</span>
+        <span><span style="display:inline-block;width:14px;height:8px;background:#f9a8d4;border-radius:2px;vertical-align:middle;"></span> scrap-risk zone (last ${shortDateMo}mo)</span>
+        <span><span style="display:inline-block;width:14px;height:8px;background:repeating-linear-gradient(45deg,#facc15,#facc15 3px,#fde68a 3px,#fde68a 6px);border:1px solid #ca8a04;vertical-align:middle;"></span> production gap (demand before DOM)</span>
+        <span><span style="display:inline-block;width:14px;height:8px;background:#f59e0b;opacity:0.55;border:1px dashed #d97706;vertical-align:middle;"></span> On Hold</span>
+        <span><span style="display:inline-block;width:2px;height:10px;background:#dc2626;vertical-align:middle;"></span> risk cutoff</span>
+        <span><span style="display:inline-block;width:2px;height:10px;background:#1a2b5e;vertical-align:middle;"></span> expiry</span>
+      </div>
+    </div>`;
 }
 // ══════════════════════════════════════════════════════════════════════════════
 //  UI CONTROLS
@@ -3729,6 +4518,148 @@ document.querySelectorAll('.tab').forEach((tab, idx) => {
   }
 });
 
+// ── Suppliers sidebar panel ─────────────────────────────────────────────────
+// Renders one row per supplier for the spotlight product. Each row has an
+// "active" checkbox (manual_toggle) and a "primary" radio. Edits flow through
+// setSupplierOverride() → getActiveSupplier() reads the layered value.
+function renderSupplierPanel() {
+  const host = document.getElementById('supplier-panel');
+  if (!host) return;
+  const product = document.getElementById('sel-product')?.value;
+  if (!product) { host.innerHTML = ''; return; }
+  const rows = (typeof SUPPLIER_REGISTRY !== 'undefined' && SUPPLIER_REGISTRY[product]) || [];
+  if (!rows.length) {
+    host.innerHTML = `<div style="color:var(--muted);font-style:italic;">No supplier registry for ${product}.</div>`;
+    document.getElementById('supplier-override-badge').style.display = 'none';
+    return;
+  }
+  const hasOverride = !!(supplierOverrides[product] && Object.keys(supplierOverrides[product]).length);
+  document.getElementById('supplier-override-badge').style.display = hasOverride ? 'inline' : 'none';
+
+  const fmtThrough = r => r.active_through ? r.active_through.slice(0,7) : '∞';
+  const safe = s => String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  // Find the supplier getActiveSupplier() would pick "now" so the user can see
+  // their toggle land on a different row.
+  const todayIso = new Date().toISOString().slice(0,10);
+  const nowPick  = getActiveSupplier(product, todayIso);
+  const nowName  = nowPick ? nowPick.supplier : null;
+
+  host.innerHTML = rows.map((r, idx) => {
+    const eff = _effectiveSupplierRow(product, r);
+    const isActive  = eff.manual_toggle === 1;
+    const isPrimary = eff.primary === 1;
+    const isOver    = !!getSupplierOverride(product, r.supplier);
+    const isLive    = (r.supplier === nowName);
+    const fromMonth = (eff.active_from || '').slice(0,7);  // YYYY-MM for <input type=month>
+    return `
+      <div style="border:1px solid var(--border);border-radius:4px;padding:6px 8px;margin-bottom:6px;${isOver ? 'border-color:var(--gold);' : ''}${isLive ? 'background:rgba(218,165,32,0.06);' : ''}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+          <span style="font-weight:600;font-size:11px;">${r.supplier}${isLive ? ' <span style=\"color:var(--gold);font-size:9px;\">● live</span>' : ''}</span>
+          <span style="font-size:9px;color:var(--muted);">→ ${fmtThrough(r)}</span>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:3px;font-size:10px;color:var(--muted);">
+          <label style="display:flex;gap:3px;align-items:center;cursor:pointer;">
+            <input type="checkbox" ${isActive ? 'checked' : ''} style="accent-color:var(--gold);"
+              onchange="setSupplierOverride('${safe(product)}','${safe(r.supplier)}',{manual_toggle: this.checked ? 1 : 0}); renderSupplierPanel(); runScenario();">
+            <span>active</span>
+          </label>
+          <label style="display:flex;gap:3px;align-items:center;cursor:pointer;">
+            <input type="radio" name="supplier-primary-${idx}-group" ${isPrimary ? 'checked' : ''} style="accent-color:var(--navy);"
+              onchange="(function(){var prod='${safe(product)}'; (SUPPLIER_REGISTRY[prod]||[]).forEach(function(rr){ setSupplierOverride(prod, rr.supplier, {primary: rr.supplier==='${safe(r.supplier)}' ? 1 : 0}); }); renderSupplierPanel(); runScenario();})()">
+            <span>primary</span>
+          </label>
+        </div>
+        <!-- Row 1: batch + LT (numeric, share the row) -->
+        <div style="display:grid;grid-template-columns:auto 1fr auto 1fr;gap:3px 5px;align-items:center;margin-top:4px;font-size:10px;color:var(--muted);min-width:0;">
+          <span>batch</span>
+          <input type="number" min="0" step="1" value="${eff.batch_size ?? ''}"
+            style="width:100%;font-size:11px;padding:2px 4px;min-width:0;"
+            title="Units/kg per batch from this supplier — overrides registry value when typed."
+            onchange="setSupplierOverride('${safe(product)}','${safe(r.supplier)}',{batch_size: parseFloat(this.value)||0}); renderSupplierPanel(); runScenario();">
+          <span>LT</span>
+          <input type="number" min="0" step="1" value="${eff.lead_time ?? ''}"
+            style="width:100%;font-size:11px;padding:2px 4px;min-width:0;"
+            title="Lead time in months — order today, receive in N months."
+            onchange="setSupplierOverride('${safe(product)}','${safe(r.supplier)}',{lead_time: parseFloat(this.value)||0}); renderSupplierPanel(); runScenario();">
+        </div>
+        <!-- Row 2: active-from gets its own full-width row so the native
+             MMM YYYY display + chevron always fit, regardless of sidebar width -->
+        <div style="display:flex;gap:5px;align-items:center;margin-top:3px;font-size:10px;color:var(--muted);min-width:0;">
+          <span>from</span>
+          <input type="month" value="${fromMonth}"
+            style="flex:1;font-size:11px;padding:2px 4px;min-width:0;"
+            title="Active-from month — supplier becomes eligible from this month forward."
+            onchange="setSupplierOverride('${safe(product)}','${safe(r.supplier)}',{active_from: this.value ? this.value + '-01' : null}); renderSupplierPanel(); runScenario();">
+        </div>
+      </div>`;
+  }).join('');
+  // Radio groups: all suppliers for this product share one "primary" group
+  host.querySelectorAll('input[type=radio]').forEach(el => el.name = 'supplier-primary-' + product);
+}
+
+// ── Dependency-factor sidebar panel ─────────────────────────────────────────
+// Lists every parent||child pair in DEPENDENCIES_FULL, grouped by parent. Each
+// row of a pair (one per supplier window) gets its own editable factor input.
+// Edits route through setDepOverride() and re-trigger runScenario so cascade
+// views (Raw Material Cascade tab, tiered MRP) reflect the new multiplier.
+function renderDepPanel() {
+  const host = document.getElementById('dep-panel');
+  if (!host) return;
+  if (typeof DEPENDENCIES_FULL === 'undefined' || !DEPENDENCIES_FULL) {
+    host.innerHTML = '<div style="color:var(--muted);font-style:italic;">No dependency registry loaded.</div>';
+    return;
+  }
+  const pairs = Object.keys(DEPENDENCIES_FULL);
+  // Sort: LP→DP first, DP→DS second, DS→RM last
+  const tier = p => {
+    if (/LP\|\|.*DP/.test(p)) return 0;
+    if (/DP\|\|.*Drug Substance/.test(p)) return 1;
+    if (/Drug Substance\|\|/.test(p)) return 2;
+    return 3;
+  };
+  pairs.sort((a,b) => tier(a) - tier(b) || a.localeCompare(b));
+
+  const hasOverride = Object.keys(depOverrides).length > 0;
+  const badge = document.getElementById('dep-override-badge');
+  if (badge) badge.style.display = hasOverride ? 'inline' : 'none';
+
+  const safe = s => String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  const fmtFactor = f => {
+    if (!isFinite(f)) return '';
+    if (Math.abs(f) >= 0.01) return f.toFixed(6).replace(/\.?0+$/, '');
+    return f.toExponential(4);
+  };
+
+  host.innerHTML = pairs.map(pairKey => {
+    const [parent, child] = pairKey.split('||');
+    const rows = DEPENDENCIES_FULL[pairKey] || [];
+    const pairHasOverride = !!depOverrides[pairKey];
+    return `
+      <div style="border:1px solid var(--border);border-radius:4px;padding:6px 8px;margin-bottom:6px;${pairHasOverride ? 'border-color:var(--gold);' : ''}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+          <span style="font-weight:600;font-size:11px;">${parent} → ${child}</span>
+          ${pairHasOverride ? `<a href="javascript:void(0)" onclick="clearDepOverridesForPair('${safe(parent)}','${safe(child)}'); renderDepPanel(); runScenario();" style="font-size:9px;color:var(--muted);text-decoration:underline;">reset</a>` : ''}
+        </div>
+        ${rows.map((r, idx) => {
+          const eff = _effectiveDepRow(parent, child, idx, r);
+          const isOver = !!getDepOverride(parent, child, idx);
+          const supLabel = r.supplier || 'any supplier';
+          const window = (r.active_from || r.active_through)
+            ? ` <span style="font-size:9px;color:var(--muted);">[${(r.active_from||'').slice(0,7) || '—'} → ${(r.active_through||'').slice(0,7) || '∞'}]</span>`
+            : '';
+          return `
+            <div style="display:grid;grid-template-columns:1fr auto;gap:3px 6px;margin-top:4px;align-items:center;font-size:10px;color:var(--muted);">
+              <span>${supLabel}${window}</span>
+              <input type="number" step="any" value="${fmtFactor(eff.factor)}"
+                style="width:90px;font-size:10px;padding:1px 2px;${isOver ? 'border-color:var(--gold);' : ''}"
+                onchange="setDepOverride('${safe(parent)}','${safe(child)}',${idx}, parseFloat(this.value)); renderDepPanel(); runScenario();">
+              <span style="grid-column:1/-1;font-size:9px;color:var(--muted);">${r.basis || ''}${isOver ? ` <span style="color:var(--gold);">(workbook ${fmtFactor(r.factor)})</span>` : ''}</span>
+            </div>`;
+        }).join('')}
+      </div>`;
+  }).join('');
+}
+
 function onProductChange() {
   const selEl = document.getElementById('sel-product');
   if (!selEl) return;
@@ -3739,6 +4670,26 @@ function onProductChange() {
   const omohEl = document.getElementById('param-overstock-moh');if (omohEl) omohEl.value = meta.overstock_moh|| 18;
   const ltEl   = document.getElementById('param-lead-time');    if (ltEl)   ltEl.value   = meta.lead_time    || 3;
   const bsEl = document.getElementById('param-batch-size'); if (bsEl) bsEl.value = meta.batch_size || '';
+
+  // Starting-BI override field: show current override or workbook default as placeholder
+  const biEl = document.getElementById('param-bi-override');
+  const biResetEl = document.getElementById('param-bi-reset');
+  if (biEl) {
+    const ov  = getBIOverride(product);
+    let def = '';
+    try {
+      const baseRows = getBaseRows(product);
+      if (baseRows && baseRows.length && baseRows[0].bi != null) def = baseRows[0].bi;
+    } catch (e) {}
+    biEl.value       = (ov === null || ov === undefined) ? '' : ov;
+    biEl.placeholder = def === '' ? 'From workbook' : `Workbook: ${Math.round(def).toLocaleString()}`;
+    if (biResetEl) biResetEl.style.display = (ov === null || ov === undefined) ? 'none' : 'inline';
+  }
+
+  // Repaint the Suppliers + Dependency panels for the new spotlight product
+  // (lot editing now lives on the Expiry Risk tab — no sidebar lot panel)
+  renderSupplierPanel();
+  renderDepPanel();
 
   // ── Sync the Combined Pool tab's pair selector to match main spotlight ─
   // If the spotlight is part of a known LP+DP pair, switch the cpool-pair
@@ -4322,6 +5273,11 @@ function init() {
     sel.innerHTML = products.map(p => `<option value="${p}">${p}</option>`).join('');
     sel.value = '188mg LP';
   }
+  // Surface the param-batch-size override badge if the input arrives non-empty
+  // (e.g. browser autofill restoring a typed value across reloads).
+  const pbs = document.getElementById('param-batch-size');
+  const pbsBadge = document.getElementById('param-batch-size-badge');
+  if (pbs && pbsBadge && parseFloat(pbs.value) > 0) pbsBadge.style.display = 'inline-block';
   renderRegionToggles();  // also calls renderIndicationToggles()
   onProductChange();
   renderScenarioList();
@@ -4530,7 +5486,7 @@ function getModelContext() {
     }).join('\n');
 
     // FEFO lot summary
-    const lotSummary = (typeof FEFO_LOTS !== 'undefined' ? FEFO_LOTS : [])
+    const lotSummary = (typeof _effectiveFEFOLots === 'function' ? _effectiveFEFOLots() : (FEFO_LOTS || []))
       .filter(l => l.product === prod)
       .map(l => `  Lot ${l.lot}: ${l.avail} units, expires ${l.expiry}, status: ${l.status||'OK'}`)
       .join('\n');
@@ -5142,7 +6098,7 @@ function renderRunwayTab() {
   // ── On-hold lot quantities from FEFO_LOTS ─────────────────────────────────
   const showOnHold = document.getElementById('runway-show-onhold')?.checked !== false;
   function getLotQtys(prod) {
-    const lots = (typeof FEFO_LOTS !== 'undefined' ? FEFO_LOTS : []).filter(l => l.product === prod);
+    const lots = (typeof _effectiveFEFOLots === 'function' ? _effectiveFEFOLots() : (FEFO_LOTS || [])).filter(l => l.product === prod);
     const avail   = lots.filter(l => (l.status||'OK') !== 'On Hold').reduce((s,l) => s+(l.avail||0), 0);
     const onHoldQ = lots.filter(l => (l.status||'OK') === 'On Hold').reduce((s,l) => s+(l.avail||0), 0);
     return { avail, onHoldQ };
@@ -5468,6 +6424,740 @@ function closeKpiDrill() {
   document.getElementById('kpi-drill-overlay').classList.remove('open');
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  MASTER DATA MODAL — tabbed editor for every embedded data source
+//
+//  The HTML is the system of record. Each tab views one slice of the embedded
+//  data, exports it as CSV (for offline editing or hand-off), and accepts an
+//  uploaded CSV that replaces that slice. Replacements go into the existing
+//  override layers (lotOverrides, supplierOverrides, depOverrides, prodOverrides)
+//  for those that have one, and into new "master baselines" for the rest
+//  (PROD_DATA, DEMAND_BY_STREAM, RAW, COST_DATA) — those are overwritten
+//  in place with a baseline snapshot kept so the user can revert.
+// ══════════════════════════════════════════════════════════════════════════════
+
+let mdActiveTab = 'deps';
+// Baseline snapshots captured at first modal open — restored by "Reset section"
+// or "Reset ALL". Deep-cloned via JSON so subsequent edits to live data don't
+// mutate the baseline.
+const mdBaselines = {};
+function _mdSnapshot(name, val) {
+  if (mdBaselines[name] === undefined) {
+    try { mdBaselines[name] = JSON.parse(JSON.stringify(val)); } catch (e) { mdBaselines[name] = val; }
+  }
+}
+function _mdCaptureBaselines() {
+  _mdSnapshot('PROD_DATA',         typeof PROD_DATA         !== 'undefined' ? PROD_DATA         : null);
+  _mdSnapshot('PROD_INPUTS',       typeof PROD_INPUTS       !== 'undefined' ? PROD_INPUTS       : null);
+  _mdSnapshot('DEMAND_BY_STREAM',  typeof DEMAND_BY_STREAM  !== 'undefined' ? DEMAND_BY_STREAM  : null);
+  _mdSnapshot('RAW',               typeof RAW               !== 'undefined' ? RAW               : null);
+  _mdSnapshot('COST_DATA',         typeof COST_DATA         !== 'undefined' ? COST_DATA         : null);
+  _mdSnapshot('FEFO_LOTS',         typeof FEFO_LOTS         !== 'undefined' ? FEFO_LOTS         : null);
+  _mdSnapshot('SUPPLIER_REGISTRY', typeof SUPPLIER_REGISTRY !== 'undefined' ? SUPPLIER_REGISTRY : null);
+  _mdSnapshot('DEPENDENCIES_FULL', typeof DEPENDENCIES_FULL !== 'undefined' ? DEPENDENCIES_FULL : null);
+}
+
+function openMasterDataModal() {
+  const ov = document.getElementById('master-data-overlay');
+  if (!ov) return;
+  _mdCaptureBaselines();
+  ov.style.display = 'flex';
+  mdSwitchTab(mdActiveTab);
+}
+function closeMasterDataModal() {
+  const ov = document.getElementById('master-data-overlay');
+  if (ov) ov.style.display = 'none';
+}
+document.getElementById('master-data-overlay')?.addEventListener('click', e => {
+  if (e.target === document.getElementById('master-data-overlay')) closeMasterDataModal();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const ov = document.getElementById('master-data-overlay');
+    if (ov && ov.style.display !== 'none') closeMasterDataModal();
+  }
+});
+
+function mdSwitchTab(name) {
+  mdActiveTab = name;
+  document.querySelectorAll('.md-tab').forEach(b => {
+    b.classList.toggle('active', b.getAttribute('data-mdtab') === name);
+  });
+  const titles = { deps:'Dependencies', suppliers:'Suppliers', lots:'Lots', prod:'Production', demand:'Demand Streams', raw:'Product Meta', costs:'Costs' };
+  document.getElementById('md-section-title').textContent = titles[name] || name;
+  const body = document.getElementById('md-body');
+  body.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted);">Loading…</div>';
+  requestAnimationFrame(() => {
+    try {
+      if      (name === 'deps')      mdRenderDeps(body);
+      else if (name === 'suppliers') mdRenderSuppliers(body);
+      else if (name === 'lots')      mdRenderLots(body);
+      else if (name === 'prod')      mdRenderProd(body);
+      else if (name === 'demand')    mdRenderDemand(body);
+      else if (name === 'raw')       mdRenderRaw(body);
+      else if (name === 'costs')     mdRenderCosts(body);
+    } catch (e) {
+      body.innerHTML = `<div style="color:var(--red);padding:12px;">Failed to render: ${e.message}</div>`;
+      console.error(e);
+    }
+    _mdUpdateStatus();
+  });
+}
+
+function _mdUpdateStatus() {
+  const status = document.getElementById('md-section-status');
+  const footer = document.getElementById('md-footer-summary');
+  if (!status || !footer) return;
+  const tally = {
+    lot:      Object.values(lotOverrides     || {}).reduce((a,o)=>a+Object.keys(o).length,0),
+    supplier: Object.values(supplierOverrides|| {}).reduce((a,o)=>a+Object.keys(o).length,0),
+    dep:      (typeof depOverrides !== 'undefined') ? Object.values(depOverrides||{}).reduce((a,o)=>a+Object.keys(o).length,0) : 0,
+    prod:     Object.values(prodOverrides    || {}).reduce((a,o)=>a+Object.keys(o).length,0),
+  };
+  const live = { lot:tally.lot, supplier:tally.supplier, dep:tally.dep, prod:tally.prod };
+  const map  = { deps:'dep', suppliers:'supplier', lots:'lot', prod:'prod' };
+  const k = map[mdActiveTab];
+  status.textContent = k ? (live[k] ? `● ${live[k]} override${live[k]===1?'':'s'} in this section` : 'no overrides') : '';
+  status.style.color = (k && live[k]) ? 'var(--gold)' : 'var(--muted)';
+  status.style.fontWeight = (k && live[k]) ? '700' : '400';
+  const total = live.lot + live.supplier + live.dep + live.prod;
+  footer.textContent = total
+    ? `${total} override${total===1?'':'s'} active — lot: ${live.lot}, supplier: ${live.supplier}, dep: ${live.dep}, prod: ${live.prod}`
+    : 'No overrides — running on workbook baseline.';
+}
+
+// ── CSV helpers ─────────────────────────────────────────────────────────────
+function _mdCsvEscape(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  return (/[",\n\r]/.test(s)) ? '"' + s.replace(/"/g,'""') + '"' : s;
+}
+function _mdRowsToCsv(headers, rows) {
+  const lines = [headers.join(',')];
+  for (const r of rows) lines.push(headers.map(h => _mdCsvEscape(r[h])).join(','));
+  return lines.join('\n');
+}
+function _mdCsvToRows(text) {
+  // Basic CSV parser — handles quoted fields, embedded commas, escaped quotes.
+  const rows = [];
+  let i = 0, field = '', row = [], inQ = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"' && text[i+1] === '"') { field += '"'; i += 2; continue; }
+      if (c === '"') { inQ = false; i++; continue; }
+      field += c; i++;
+    } else {
+      if (c === '"') { inQ = true; i++; continue; }
+      if (c === ',') { row.push(field); field=''; i++; continue; }
+      if (c === '\r') { i++; continue; }
+      if (c === '\n') { row.push(field); rows.push(row); row=[]; field=''; i++; continue; }
+      field += c; i++;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  if (!rows.length) return [];
+  const headers = rows[0].map(h => h.trim());
+  return rows.slice(1).filter(r => r.length && r.some(v => v !== ''))
+    .map(r => Object.fromEntries(headers.map((h,j)=>[h, r[j] !== undefined ? r[j] : ''])));
+}
+function _mdDownloadFile(filename, text) {
+  const blob = new Blob([text], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+  setTimeout(()=>{ document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+}
+function _mdNum(v) {
+  if (v === '' || v === null || v === undefined) return 0;
+  const n = parseFloat(v);
+  return isFinite(n) ? n : 0;
+}
+function _mdStr(v) { return (v === null || v === undefined) ? '' : String(v); }
+
+// ── Tab body renderers ──────────────────────────────────────────────────────
+function mdRenderDeps(host) {
+  const rows = [];
+  if (typeof DEPENDENCIES_FULL === 'object' && DEPENDENCIES_FULL) {
+    for (const pairKey of Object.keys(DEPENDENCIES_FULL).sort()) {
+      const [parent, child] = pairKey.split('||');
+      for (const r of (DEPENDENCIES_FULL[pairKey] || [])) {
+        rows.push({ parent, child, supplier:r.supplier||'', factor:r.factor, basis:r.basis||'',
+                    active_from:r.active_from||'', active_through:r.active_through||'' });
+      }
+    }
+  }
+  host.innerHTML = `
+    <p class="md-hint">Multipliers driving the LP→DP→DS→RM cascade. Edit individual factors in the table below; CSV export captures every row. Editing here also still works through the legacy <code>setDepOverride</code> path so the cascade tabs refresh live.</p>
+    <div id="dep-panel" style="font-size:12px;"></div>
+    <div style="margin-top:14px;">
+      <div style="font-weight:700;font-size:11px;color:var(--muted);margin-bottom:4px;">Full registry (CSV-exportable)</div>
+      <table>
+        <thead><tr><th>Parent</th><th>Child</th><th>Supplier</th><th>Factor</th><th>Basis</th><th>Active from</th><th>Active through</th></tr></thead>
+        <tbody>${rows.map(r=>`<tr><td>${r.parent}</td><td>${r.child}</td><td>${r.supplier}</td><td style="text-align:right;font-family:monospace">${r.factor}</td><td>${r.basis}</td><td>${r.active_from}</td><td>${r.active_through}</td></tr>`).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:14px;font-style:italic;">No dependency registry.</td></tr>'}</tbody>
+      </table>
+    </div>`;
+  if (typeof renderDepPanel === 'function') renderDepPanel();
+}
+
+function mdRenderSuppliers(host) {
+  const rows = [];
+  if (typeof SUPPLIER_REGISTRY === 'object' && SUPPLIER_REGISTRY) {
+    for (const product of Object.keys(SUPPLIER_REGISTRY).sort()) {
+      for (const r of (SUPPLIER_REGISTRY[product] || [])) {
+        const ov = (supplierOverrides[product]||{})[r.supplier];
+        const eff = ov ? Object.assign({}, r, ov) : r;
+        rows.push({
+          product, supplier: r.supplier,
+          batch_size: eff.batch_size, lead_time: eff.lead_time,
+          target_moh: eff.target_moh, critical_moh: eff.critical_moh, overstock_moh: eff.overstock_moh,
+          active_from: eff.active_from || '', active_through: eff.active_through || '',
+          manual_toggle: eff.manual_toggle ? 1 : 0, primary: eff.primary ? 1 : 0,
+          binding_mo: eff.binding_mo || '', overridden: ov ? 'YES' : '',
+        });
+      }
+    }
+  }
+  host.innerHTML = `
+    <p class="md-hint">Per-product supplier registry with time-windowed batch_size / lead_time / MOH targets and active-from/through windows. Edit in the <b>🏭 Suppliers</b> sidebar for the live form; this is the canonical view + CSV pipe.</p>
+    <table>
+      <thead><tr><th>Product</th><th>Supplier</th><th>Batch</th><th>LT</th><th>Target MOH</th><th>Crit MOH</th><th>Overstock</th><th>Active from</th><th>Active through</th><th>Active</th><th>Primary</th><th>Binding mo</th><th>Ov</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr><td>${r.product}</td><td>${r.supplier}</td><td style="text-align:right;font-family:monospace">${r.batch_size}</td><td style="text-align:right">${r.lead_time}</td><td style="text-align:right">${r.target_moh}</td><td style="text-align:right">${r.critical_moh}</td><td style="text-align:right">${r.overstock_moh}</td><td>${r.active_from.slice(0,10)}</td><td>${r.active_through.slice(0,10)}</td><td style="text-align:center">${r.manual_toggle?'✓':''}</td><td style="text-align:center">${r.primary?'★':''}</td><td style="text-align:center">${r.binding_mo}</td><td style="text-align:center;color:var(--gold);font-weight:700">${r.overridden}</td></tr>`).join('') || '<tr><td colspan="13" style="text-align:center;color:var(--muted);padding:14px;font-style:italic;">No supplier registry.</td></tr>'}</tbody>
+    </table>`;
+}
+
+function mdRenderLots(host) {
+  const rows = [];
+  if (typeof _effectiveFEFOLots === 'function') {
+    for (const l of _effectiveFEFOLots()) {
+      const ov = (lotOverrides[l.product]||{})[l.lot];
+      rows.push({
+        product: l.product, lot: l.lot, seq: l.seq, status: l.status,
+        avail: l.avail, dom: l.dom || '', expiry: (l.expiry||'').slice(0,10),
+        runout: (l.runout||'').slice(0,10),
+        release_deadline: (l.release_deadline||''),
+        cumAvail: l.cumAvail || '', risk: l.risk || 0,
+        overridden: ov ? (ov._added ? 'NEW' : ov._deleted ? 'DEL' : 'EDIT') : '',
+      });
+    }
+  }
+  host.innerHTML = `
+    <p class="md-hint">Effective lot registry = workbook baseline + your inline edits. The <b>🧪 Lots</b> column inside the <b>Expiry Risk</b> tab is the live editor. Export → tweak in Excel → re-import via this tab to bulk-load lot updates.</p>
+    <table>
+      <thead><tr><th>Product</th><th>Lot</th><th>Seq</th><th>Status</th><th>Avail</th><th>DOM</th><th>Expiry</th><th>Runout</th><th>Release deadline</th><th>cumAvail</th><th>Risk</th><th>Ov</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr><td>${r.product}</td><td style="font-family:monospace">${r.lot}</td><td style="text-align:center">${r.seq}</td><td>${r.status}</td><td style="text-align:right;font-family:monospace">${r.avail}</td><td>${r.dom.slice(0,10)}</td><td>${r.expiry}</td><td>${r.runout}</td><td>${r.release_deadline.slice(0,10)}</td><td style="text-align:right;font-family:monospace">${r.cumAvail}</td><td style="text-align:right;font-family:monospace">${r.risk}</td><td style="text-align:center;color:var(--gold);font-weight:700">${r.overridden}</td></tr>`).join('') || '<tr><td colspan="12" style="text-align:center;color:var(--muted);padding:14px;font-style:italic;">No lots.</td></tr>'}</tbody>
+    </table>`;
+}
+
+function mdRenderProd(host) {
+  // Mirror the workbook's "Production Inputs" sheet exactly: each row is one
+  // product/supplier pairing, columns are months, cell = scheduled qty.
+  // Inline-editable — changes propagate through runScenario to runMRP and
+  // every dependent view.
+  const inputs = (typeof PROD_INPUTS !== 'undefined' && Array.isArray(PROD_INPUTS)) ? PROD_INPUTS : [];
+  if (!inputs.length) {
+    host.innerHTML = '<p class="md-hint">No <code>PROD_INPUTS</code> data loaded. Run <code>refresh_dashboard.py</code> against the workbook to populate.</p>';
+    return;
+  }
+  // Union of months across products, sorted
+  const monthSet = new Set();
+  inputs.forEach(p => (p.months||[]).forEach(m => monthSet.add(m.month)));
+  const months = Array.from(monthSet).sort();
+  const fmtMo = m => {
+    const d = new Date(m);
+    return d.toLocaleString('en-US', { month: 'short', year: '2-digit' });
+  };
+  const safe = s => String(s).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+  // Column total by month
+  const monthTotals = {};
+  months.forEach(m => monthTotals[m] = 0);
+  inputs.forEach(p => (p.months||[]).forEach(m => { if (monthTotals[m.month] !== undefined) monthTotals[m.month] += (m.qty || 0); }));
+
+  host.innerHTML = `
+    <p class="md-hint">Mirrors the workbook's <b>Production Inputs</b> sheet. Each cell is the scheduled production qty for that product/supplier in that month. Amber-tinted cells fall within each product's binding period (contractually committed). Edit any cell inline — changes flow into <code>runMRP</code> and every dependent view (Production, Inventory, Combined Pool, Budget).</p>
+    <div style="overflow:auto;max-height:62vh;border:1px solid var(--border);border-radius:4px;">
+      <table style="font-size:10px;border-collapse:separate;border-spacing:0;">
+        <thead>
+          <tr>
+            <th style="position:sticky;left:0;top:0;z-index:3;background:var(--navy);min-width:130px;">Product</th>
+            <th style="position:sticky;top:0;z-index:2;background:var(--navy);min-width:120px;">Supplier</th>
+            <th style="position:sticky;top:0;z-index:2;background:var(--navy);">Unit</th>
+            <th style="position:sticky;top:0;z-index:2;background:var(--navy);text-align:right;">Batch</th>
+            <th style="position:sticky;top:0;z-index:2;background:var(--navy);text-align:center;">Bind mo</th>
+            <th style="position:sticky;top:0;z-index:2;background:var(--navy);">Bind thru</th>
+            ${months.map(m=>`<th style="position:sticky;top:0;z-index:2;background:var(--navy);text-align:right;min-width:58px;">${fmtMo(m)}</th>`).join('')}
+            <th style="position:sticky;top:0;z-index:2;background:var(--gold);color:var(--navy);text-align:right;min-width:70px;">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${inputs.map((p, pi) => {
+            const map = {};
+            (p.months||[]).forEach(m => { map[m.month] = m.qty || 0; });
+            const total = Object.values(map).reduce((a,b)=>a+(b||0),0);
+            return `<tr>
+              <td style="position:sticky;left:0;background:#fff;font-weight:600;border-right:1px solid var(--border);">${p.product}</td>
+              <td>${p.supplier||''}</td>
+              <td style="font-size:10px;color:var(--muted)">${p.unit||''}</td>
+              <td style="text-align:right;font-family:monospace;">${p.batch_size||''}</td>
+              <td style="text-align:center;">${p.binding_mo||''}</td>
+              <td style="font-size:10px;color:var(--muted)">${(p.binding_through||'').slice(0,10)}</td>
+              ${months.map(m => {
+                const v = map[m] || 0;
+                const bound = p.binding_through && m < p.binding_through;
+                return `<td style="text-align:right;padding:1px 2px;${bound ? 'background:rgba(218,165,32,0.06);' : ''}">
+                  <input type="number" value="${v}" step="any" min="0"
+                    onchange="mdSetProdInputQty(${pi}, '${m}', parseFloat(this.value)||0)"
+                    style="width:50px;font-size:10px;padding:1px 2px;text-align:right;border:1px solid var(--border);background:transparent;font-family:monospace;${bound ? 'color:var(--navy);font-weight:600;' : ''}"
+                    title="${p.product} · ${m.slice(0,7)}${bound ? ' (binding period)' : ''}">
+                </td>`;
+              }).join('')}
+              <td style="text-align:right;font-family:monospace;font-weight:700;color:var(--navy);background:rgba(218,165,32,0.08);">${total.toLocaleString()}</td>
+            </tr>`;
+          }).join('')}
+          <tr style="position:sticky;bottom:0;background:#fff;border-top:2px solid var(--navy);font-weight:700;">
+            <td colspan="6" style="position:sticky;left:0;background:#fff;text-align:right;padding-right:8px;color:var(--navy);">Monthly total</td>
+            ${months.map(m => `<td style="text-align:right;font-family:monospace;color:var(--navy);">${monthTotals[m].toLocaleString()}</td>`).join('')}
+            <td style="text-align:right;font-family:monospace;background:var(--gold);color:var(--navy);">${Object.values(monthTotals).reduce((a,b)=>a+b,0).toLocaleString()}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// Inline-edit handler for the Production Inputs grid. Writes into the live
+// PROD_INPUTS structure and triggers a scenario re-run so downstream views
+// (Production tab, Inventory, Combined Pool, Budget) refresh immediately.
+function mdSetProdInputQty(productIdx, monthIso, qty) {
+  if (!Array.isArray(PROD_INPUTS) || !PROD_INPUTS[productIdx]) return;
+  const p = PROD_INPUTS[productIdx];
+  if (!Array.isArray(p.months)) p.months = [];
+  const existing = p.months.find(m => m.month === monthIso);
+  if (existing) existing.qty = qty;
+  else p.months.push({ month: monthIso, qty });
+  if (typeof runScenario === 'function') runScenario();
+  _mdUpdateStatus();
+}
+
+function mdRenderDemand(host) {
+  const streams = (typeof DEMAND_BY_STREAM === 'object' && DEMAND_BY_STREAM) ? Object.keys(DEMAND_BY_STREAM).sort() : [];
+  // Pivot first 24 months × streams
+  const monthSet = new Set();
+  streams.forEach(k => (DEMAND_BY_STREAM[k]||[]).forEach(r => monthSet.add(r.m)));
+  const months = Array.from(monthSet).sort();
+  const sample = months.slice(0, 24);
+  const lookup = (k, m) => (DEMAND_BY_STREAM[k]||[]).find(r=>r.m===m)?.d || 0;
+  host.innerHTML = `
+    <p class="md-hint">Per-stream monthly demand. ${streams.length} streams × ${months.length} months loaded. CSV export pivots stream-name down rows and month-by-month columns. Showing first 24 months below — full series in CSV.</p>
+    <table>
+      <thead><tr><th>Stream</th>${sample.map(m=>`<th style="text-align:right">${m.slice(0,7)}</th>`).join('')}</tr></thead>
+      <tbody>${streams.map(s=>`<tr><td style="font-size:10px">${s}</td>${sample.map(m=>`<td style="text-align:right;font-family:monospace;font-size:10px">${Math.round(lookup(s,m))}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table>`;
+}
+
+function mdRenderRaw(host) {
+  // Inline-editable. Each cell writes through mdSetRaw which triggers
+  // runScenario; Reset section restores the baseline snapshot.
+  const products = (typeof RAW === 'object' && RAW) ? Object.keys(RAW).sort() : [];
+  const safe = s => String(s).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+  host.innerHTML = `
+    <p class="md-hint">Per-product metadata — edit any cell inline. Drives MRP fallback when the supplier registry doesn't cover a product/month, and feeds chart tooltips. <b>Reset section</b> rolls every value back to the baseline snapshot captured when you opened this modal.</p>
+    <table>
+      <thead><tr><th>Product</th><th>Category</th><th>Unit</th><th>Target MOH</th><th>Critical MOH</th><th>Overstock</th><th>Batch size</th><th>Lead time</th><th>Supplier</th></tr></thead>
+      <tbody>${products.map(p=>{ const r = RAW[p]||{}; return `<tr>
+        <td><b>${p}</b></td>
+        <td><input type="text"   value="${safe(r.category||'')}"   onchange="mdSetRaw('${safe(p)}','category',this.value)" style="width:100px;"></td>
+        <td><input type="text"   value="${safe(r.unit||'')}"        onchange="mdSetRaw('${safe(p)}','unit',this.value)" style="width:55px;"></td>
+        <td><input type="number" step="any" min="0" value="${r.target_moh   ?? ''}" onchange="mdSetRaw('${safe(p)}','target_moh',   parseFloat(this.value)||0)" style="width:54px;text-align:right;"></td>
+        <td><input type="number" step="any" min="0" value="${r.critical_moh ?? ''}" onchange="mdSetRaw('${safe(p)}','critical_moh', parseFloat(this.value)||0)" style="width:54px;text-align:right;"></td>
+        <td><input type="number" step="any" min="0" value="${r.overstock_moh?? ''}" onchange="mdSetRaw('${safe(p)}','overstock_moh',parseFloat(this.value)||0)" style="width:54px;text-align:right;"></td>
+        <td><input type="number" step="any" min="0" value="${r.batch_size   ?? ''}" onchange="mdSetRaw('${safe(p)}','batch_size',   parseFloat(this.value)||0)" style="width:80px;text-align:right;font-family:monospace;"></td>
+        <td><input type="number" step="any" min="0" value="${r.lead_time    ?? ''}" onchange="mdSetRaw('${safe(p)}','lead_time',    parseFloat(this.value)||0)" style="width:54px;text-align:right;"></td>
+        <td><input type="text"   value="${safe(r.supplier||'')}"    onchange="mdSetRaw('${safe(p)}','supplier',this.value)" style="width:170px;"></td>
+      </tr>`; }).join('')}</tbody>
+    </table>`;
+}
+
+function mdSetRaw(product, field, value) {
+  if (typeof RAW !== 'object' || !RAW) window.RAW = {};
+  if (!RAW[product]) RAW[product] = {};
+  RAW[product][field] = value;
+  if (typeof runScenario === 'function') runScenario();
+  _mdUpdateStatus();
+}
+
+function mdRenderCosts(host) {
+  const products = (typeof COST_DATA === 'object' && COST_DATA && COST_DATA.products) ? Object.keys(COST_DATA.products).sort() : [];
+  const safe = s => String(s).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+  host.innerHTML = `
+    <p class="md-hint">Per-product cost data — edit inline. Drives <b>Inventory Valuation</b> and <b>Budget Impact</b> tabs. "Cost by batch?" toggles between per-batch and per-UoM production cost models.</p>
+    <table>
+      <thead><tr><th>Product</th><th>Inv value / UoM</th><th>Prod cost / batch</th><th>Prod cost / UoM</th><th>By batch?</th><th>Unit</th><th>Supplier</th></tr></thead>
+      <tbody>${products.map(p=>{ const r = (COST_DATA.products||{})[p]||{}; return `<tr>
+        <td><b>${p}</b></td>
+        <td><input type="number" step="any" min="0" value="${r.inv_value_uom   || 0}" onchange="mdSetCost('${safe(p)}','inv_value_uom',  parseFloat(this.value)||0)" style="width:100px;text-align:right;font-family:monospace;"></td>
+        <td><input type="number" step="any" min="0" value="${r.prod_cost_batch || 0}" onchange="mdSetCost('${safe(p)}','prod_cost_batch',parseFloat(this.value)||0)" style="width:120px;text-align:right;font-family:monospace;"></td>
+        <td><input type="number" step="any" min="0" value="${r.prod_cost_uom   || 0}" onchange="mdSetCost('${safe(p)}','prod_cost_uom',  parseFloat(this.value)||0)" style="width:100px;text-align:right;font-family:monospace;"></td>
+        <td style="text-align:center;"><input type="checkbox" ${r.cost_by_batch ? 'checked' : ''} onchange="mdSetCost('${safe(p)}','cost_by_batch', this.checked)"></td>
+        <td><input type="text" value="${safe(r.unit||'units')}" onchange="mdSetCost('${safe(p)}','unit', this.value)" style="width:60px;"></td>
+        <td><input type="text" value="${safe(r.supplier||'')}"  onchange="mdSetCost('${safe(p)}','supplier', this.value)" style="width:180px;"></td>
+      </tr>`; }).join('')}</tbody>
+    </table>`;
+}
+
+function mdSetCost(product, field, value) {
+  if (typeof COST_DATA !== 'object' || !COST_DATA) window.COST_DATA = {};
+  if (!COST_DATA.products) COST_DATA.products = {};
+  if (!COST_DATA.products[product]) COST_DATA.products[product] = {};
+  COST_DATA.products[product][field] = value;
+  if (typeof runScenario === 'function') runScenario();
+  _mdUpdateStatus();
+}
+
+// ── CSV export per tab ──────────────────────────────────────────────────────
+function mdDownloadCSV() {
+  const ts = new Date().toISOString().slice(0,10);
+  let filename = `master-data-${mdActiveTab}-${ts}.csv`;
+  let csv = '';
+  switch (mdActiveTab) {
+    case 'deps': {
+      const rows = [];
+      for (const k of Object.keys(DEPENDENCIES_FULL||{})) {
+        const [parent, child] = k.split('||');
+        for (const r of (DEPENDENCIES_FULL[k]||[])) {
+          rows.push({ parent, child, supplier:r.supplier||'', factor:r.factor, basis:r.basis||'',
+                      active_from:r.active_from||'', active_through:r.active_through||'' });
+        }
+      }
+      csv = _mdRowsToCsv(['parent','child','supplier','factor','basis','active_from','active_through'], rows);
+      break;
+    }
+    case 'suppliers': {
+      const rows = [];
+      for (const product of Object.keys(SUPPLIER_REGISTRY||{})) {
+        for (const r of (SUPPLIER_REGISTRY[product]||[])) {
+          const ov = (supplierOverrides[product]||{})[r.supplier];
+          const eff = ov ? Object.assign({}, r, ov) : r;
+          rows.push({ product, supplier:r.supplier, batch_size:eff.batch_size, lead_time:eff.lead_time,
+                      target_moh:eff.target_moh, critical_moh:eff.critical_moh, overstock_moh:eff.overstock_moh,
+                      active_from:eff.active_from||'', active_through:eff.active_through||'',
+                      manual_toggle:eff.manual_toggle?1:0, primary:eff.primary?1:0,
+                      binding_mo:eff.binding_mo||'' });
+        }
+      }
+      csv = _mdRowsToCsv(['product','supplier','batch_size','lead_time','target_moh','critical_moh','overstock_moh','active_from','active_through','manual_toggle','primary','binding_mo'], rows);
+      break;
+    }
+    case 'lots': {
+      const rows = (typeof _effectiveFEFOLots === 'function') ? _effectiveFEFOLots().map(l => ({
+        product:l.product, lot:l.lot, seq:l.seq, status:l.status||'OK',
+        avail:l.avail||0, dom:l.dom||'', expiry:(l.expiry||'').slice(0,10),
+        runout:(l.runout||'').slice(0,10), release_deadline:(l.release_deadline||'').slice(0,10),
+        cumAvail:l.cumAvail||'', risk:l.risk||0,
+      })) : [];
+      csv = _mdRowsToCsv(['product','lot','seq','status','avail','dom','expiry','runout','release_deadline','cumAvail','risk'], rows);
+      break;
+    }
+    case 'prod': {
+      // Long-format export of PROD_INPUTS (one row per product/supplier/month).
+      // Each product carries its supplier/unit/batch_size/binding_* metadata so
+      // round-tripping reconstructs the full structure on import.
+      const rows = [];
+      for (const p of (PROD_INPUTS||[])) {
+        for (const m of (p.months||[])) {
+          rows.push({
+            product: p.product, supplier: p.supplier || '', unit: p.unit || '',
+            batch_size: p.batch_size || '',
+            binding_mo: p.binding_mo || '',
+            binding_through: (p.binding_through||'').slice(0,10),
+            month: (m.month||'').slice(0,10),
+            qty: m.qty || 0,
+          });
+        }
+      }
+      csv = _mdRowsToCsv(['product','supplier','unit','batch_size','binding_mo','binding_through','month','qty'], rows);
+      break;
+    }
+    case 'demand': {
+      const rows = [];
+      for (const k of Object.keys(DEMAND_BY_STREAM||{})) {
+        for (const r of (DEMAND_BY_STREAM[k]||[])) {
+          rows.push({ stream:k, month:(r.m||'').slice(0,10), demand:r.d||0 });
+        }
+      }
+      csv = _mdRowsToCsv(['stream','month','demand'], rows);
+      break;
+    }
+    case 'raw': {
+      const rows = Object.entries(RAW||{}).map(([p,r])=>({
+        product:p, category:r.category||'', unit:r.unit||'',
+        target_moh:r.target_moh||'', critical_moh:r.critical_moh||'', overstock_moh:r.overstock_moh||'',
+        batch_size:r.batch_size||'', lead_time:r.lead_time||'', supplier:r.supplier||'',
+      }));
+      csv = _mdRowsToCsv(['product','category','unit','target_moh','critical_moh','overstock_moh','batch_size','lead_time','supplier'], rows);
+      break;
+    }
+    case 'costs': {
+      const rows = Object.entries((COST_DATA||{}).products||{}).map(([p,r])=>({
+        product:p, inv_value_uom:r.inv_value_uom||0, prod_cost_batch:r.prod_cost_batch||0,
+        prod_cost_uom:r.prod_cost_uom||0, cost_by_batch:r.cost_by_batch?1:0,
+        unit:r.unit||'', supplier:r.supplier||'',
+      }));
+      csv = _mdRowsToCsv(['product','inv_value_uom','prod_cost_batch','prod_cost_uom','cost_by_batch','unit','supplier'], rows);
+      break;
+    }
+  }
+  _mdDownloadFile(filename, csv);
+}
+
+// ── CSV import per tab ──────────────────────────────────────────────────────
+function mdUploadCSV(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const rows = _mdCsvToRows(e.target.result);
+      if (!rows.length) { alert('CSV had no data rows.'); return; }
+      const before = mdActiveTab;
+      const applied = _mdApplyCsv(mdActiveTab, rows);
+      alert(`Imported ${applied} ${before} row${applied===1?'':'s'}.`);
+      mdSwitchTab(before);
+      if (typeof runScenario === 'function') runScenario();
+    } catch (err) {
+      alert('CSV import failed: ' + err.message);
+      console.error(err);
+    } finally {
+      ev.target.value = '';
+    }
+  };
+  reader.readAsText(file);
+}
+
+function _mdApplyCsv(tab, rows) {
+  let count = 0;
+  switch (tab) {
+    case 'lots': {
+      // Strategy: write each CSV row as an override on lotOverrides. Lots whose
+      // (product, lot) match the workbook get partial-patch overrides; lots not
+      // in the workbook get marked _added.
+      const wbKeys = new Set();
+      if (typeof FEFO_LOTS !== 'undefined') for (const l of FEFO_LOTS) wbKeys.add(l.product + '||' + l.lot);
+      // Reset lot overrides for products we're touching, so deletions in CSV
+      // are honored.
+      const touched = new Set();
+      for (const r of rows) { if (r.product) touched.add(r.product); }
+      for (const p of touched) delete lotOverrides[p];
+      for (const r of rows) {
+        const product = _mdStr(r.product).trim();
+        const lot     = _mdStr(r.lot).trim();
+        if (!product || !lot) continue;
+        const key = product + '||' + lot;
+        const patch = {
+          status: _mdStr(r.status) || 'OK',
+          avail: _mdNum(r.avail),
+          dom: _mdStr(r.dom) || null,
+          expiry: _mdStr(r.expiry) || null,
+        };
+        if (!wbKeys.has(key)) {
+          patch._added = true;
+          patch.product = product;
+          patch.lot = lot;
+          patch.seq = _mdNum(r.seq) || 0;
+          patch.cumAvail = _mdNum(r.cumAvail);
+          patch.risk = _mdNum(r.risk);
+          patch.runout = _mdStr(r.runout) || null;
+          patch.release_deadline = _mdStr(r.release_deadline) || null;
+          patch.days_to_release = null;
+        }
+        if (!lotOverrides[product]) lotOverrides[product] = {};
+        lotOverrides[product][lot] = Object.assign({}, lotOverrides[product][lot]||{}, patch);
+        count++;
+      }
+      if (typeof _persistLotOverrides === 'function') _persistLotOverrides();
+      break;
+    }
+    case 'suppliers': {
+      // Replace supplierOverrides wholesale based on CSV rows.
+      const groups = {};
+      for (const r of rows) {
+        const p = _mdStr(r.product).trim();
+        const s = _mdStr(r.supplier).trim();
+        if (!p || !s) continue;
+        if (!groups[p]) groups[p] = {};
+        groups[p][s] = {
+          batch_size: _mdNum(r.batch_size),
+          lead_time: _mdNum(r.lead_time),
+          target_moh: _mdNum(r.target_moh),
+          critical_moh: _mdNum(r.critical_moh),
+          overstock_moh: _mdNum(r.overstock_moh),
+          active_from: _mdStr(r.active_from) || null,
+          active_through: _mdStr(r.active_through) || null,
+          manual_toggle: _mdNum(r.manual_toggle) ? 1 : 0,
+          primary: _mdNum(r.primary) ? 1 : 0,
+          binding_mo: _mdNum(r.binding_mo) || 9,
+        };
+        count++;
+      }
+      Object.keys(groups).forEach(p => { supplierOverrides[p] = groups[p]; });
+      if (typeof _persistSupplierOverrides === 'function') _persistSupplierOverrides();
+      break;
+    }
+    case 'deps': {
+      // Overwrite DEPENDENCIES_FULL in memory. We DO NOT route via setDepOverride
+      // for bulk import — that's row-by-row UX. CSV import is "the whole table
+      // is what you say it is."
+      const grouped = {};
+      for (const r of rows) {
+        const parent = _mdStr(r.parent).trim();
+        const child  = _mdStr(r.child).trim();
+        if (!parent || !child) continue;
+        const key = parent + '||' + child;
+        if (!grouped[key]) grouped[key] = [];
+        grouped[key].push({
+          parent, child,
+          supplier: _mdStr(r.supplier) || '',
+          factor: _mdNum(r.factor),
+          basis: _mdStr(r.basis),
+          active_from: _mdStr(r.active_from) || null,
+          active_through: _mdStr(r.active_through) || null,
+        });
+        count++;
+      }
+      window.DEPENDENCIES_FULL = grouped;
+      // Rebuild flat DEPENDENCIES (parent→child→factor) from primary supplier rows
+      const flat = {};
+      for (const k of Object.keys(grouped)) {
+        const child = k.split('||')[1];
+        const primary = grouped[k][0];
+        if (primary) flat[child] = primary.factor;
+      }
+      window.DEPENDENCIES = flat;
+      break;
+    }
+    case 'prod': {
+      // Reconstruct PROD_INPUTS from long-format CSV. Group by
+      // (product, supplier) — each group's metadata comes from any row in
+      // that group (consistent within a CSV by convention); months[] is
+      // assembled in chronological order.
+      const groups = {};
+      for (const r of rows) {
+        const product = _mdStr(r.product).trim();
+        if (!product) continue;
+        const supplier = _mdStr(r.supplier).trim();
+        const key = product + '||' + supplier;
+        if (!groups[key]) {
+          groups[key] = {
+            product, supplier,
+            unit: _mdStr(r.unit),
+            batch_size: _mdNum(r.batch_size),
+            binding_mo: _mdNum(r.binding_mo) || 9,
+            binding_through: _mdStr(r.binding_through).slice(0,10) || null,
+            months: [],
+          };
+        }
+        const month = _mdStr(r.month).slice(0,10);
+        if (month) groups[key].months.push({ month, qty: _mdNum(r.qty) });
+        count++;
+      }
+      // Sort each product's months chronologically
+      for (const k of Object.keys(groups)) groups[k].months.sort((a,b)=>a.month.localeCompare(b.month));
+      window.PROD_INPUTS = Object.values(groups);
+      break;
+    }
+    case 'demand': {
+      // Overwrite DEMAND_BY_STREAM wholesale.
+      const grouped = {};
+      for (const r of rows) {
+        const s = _mdStr(r.stream).trim();
+        const m = _mdStr(r.month).slice(0,10);
+        if (!s || !m) continue;
+        if (!grouped[s]) grouped[s] = [];
+        grouped[s].push({ m, d: _mdNum(r.demand) });
+        count++;
+      }
+      // Sort each stream's series by month
+      Object.keys(grouped).forEach(s => grouped[s].sort((a,b)=>a.m.localeCompare(b.m)));
+      window.DEMAND_BY_STREAM = grouped;
+      break;
+    }
+    case 'raw': {
+      const next = {};
+      for (const r of rows) {
+        const p = _mdStr(r.product).trim();
+        if (!p) continue;
+        next[p] = {
+          category: _mdStr(r.category), unit: _mdStr(r.unit),
+          target_moh: _mdNum(r.target_moh) || 9, critical_moh: _mdNum(r.critical_moh) || 6,
+          overstock_moh: _mdNum(r.overstock_moh) || 18,
+          batch_size: _mdNum(r.batch_size), lead_time: _mdNum(r.lead_time) || 3,
+          supplier: _mdStr(r.supplier),
+        };
+        count++;
+      }
+      window.RAW = next;
+      break;
+    }
+    case 'costs': {
+      const next = Object.assign({}, COST_DATA || {});
+      next.products = next.products || {};
+      for (const r of rows) {
+        const p = _mdStr(r.product).trim();
+        if (!p) continue;
+        next.products[p] = {
+          inv_value_uom: _mdNum(r.inv_value_uom),
+          prod_cost_batch: _mdNum(r.prod_cost_batch),
+          prod_cost_uom: _mdNum(r.prod_cost_uom),
+          cost_by_batch: !!_mdNum(r.cost_by_batch),
+          unit: _mdStr(r.unit) || 'units',
+          supplier: _mdStr(r.supplier),
+        };
+        count++;
+      }
+      window.COST_DATA = next;
+      break;
+    }
+  }
+  return count;
+}
+
+function mdResetTab() {
+  if (!confirm('Clear all changes in this section and reload from baseline? This affects only the current tab.')) return;
+  switch (mdActiveTab) {
+    case 'lots':      lotOverrides      = {}; if (typeof _persistLotOverrides      === 'function') _persistLotOverrides();      break;
+    case 'suppliers': supplierOverrides = {}; if (typeof _persistSupplierOverrides === 'function') _persistSupplierOverrides(); break;
+    case 'deps':      if (typeof clearAllDepOverrides === 'function') clearAllDepOverrides();
+                      if (mdBaselines.DEPENDENCIES_FULL) window.DEPENDENCIES_FULL = JSON.parse(JSON.stringify(mdBaselines.DEPENDENCIES_FULL));
+                      break;
+    case 'prod':      prodOverrides = {};
+                      if (mdBaselines.PROD_INPUTS) window.PROD_INPUTS = JSON.parse(JSON.stringify(mdBaselines.PROD_INPUTS));
+                      if (mdBaselines.PROD_DATA)   window.PROD_DATA   = JSON.parse(JSON.stringify(mdBaselines.PROD_DATA));
+                      break;
+    case 'demand':    if (mdBaselines.DEMAND_BY_STREAM) window.DEMAND_BY_STREAM = JSON.parse(JSON.stringify(mdBaselines.DEMAND_BY_STREAM));    break;
+    case 'raw':       if (mdBaselines.RAW) window.RAW = JSON.parse(JSON.stringify(mdBaselines.RAW));    break;
+    case 'costs':     if (mdBaselines.COST_DATA) window.COST_DATA = JSON.parse(JSON.stringify(mdBaselines.COST_DATA));    break;
+  }
+  mdSwitchTab(mdActiveTab);
+  if (typeof runScenario === 'function') runScenario();
+}
+
+function mdResetAll() {
+  if (!confirm('Wipe ALL overrides and reload every section from the workbook baseline?\n\nThis will lose every inline lot edit, supplier toggle, prod override, and dep override.')) return;
+  lotOverrides = {};
+  supplierOverrides = {};
+  prodOverrides = {};
+  if (typeof clearAllDepOverrides === 'function') clearAllDepOverrides();
+  if (mdBaselines.PROD_DATA)         window.PROD_DATA         = JSON.parse(JSON.stringify(mdBaselines.PROD_DATA));
+  if (mdBaselines.PROD_INPUTS)       window.PROD_INPUTS       = JSON.parse(JSON.stringify(mdBaselines.PROD_INPUTS));
+  if (mdBaselines.DEMAND_BY_STREAM)  window.DEMAND_BY_STREAM  = JSON.parse(JSON.stringify(mdBaselines.DEMAND_BY_STREAM));
+  if (mdBaselines.RAW)               window.RAW               = JSON.parse(JSON.stringify(mdBaselines.RAW));
+  if (mdBaselines.COST_DATA)         window.COST_DATA         = JSON.parse(JSON.stringify(mdBaselines.COST_DATA));
+  if (mdBaselines.DEPENDENCIES_FULL) window.DEPENDENCIES_FULL = JSON.parse(JSON.stringify(mdBaselines.DEPENDENCIES_FULL));
+  if (typeof _persistLotOverrides      === 'function') _persistLotOverrides();
+  if (typeof _persistSupplierOverrides === 'function') _persistSupplierOverrides();
+  mdSwitchTab(mdActiveTab);
+  if (typeof runScenario === 'function') runScenario();
+}
+
 // ── SIDEBAR RESIZE ────────────────────────────────────────────────────────
 (function() {
   const handle  = document.getElementById('sidebar-resize');
@@ -5504,9 +7194,30 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeKpiDril
 // ══════════════════════════════════════════════════════════════════════════════
 //  COMBINED POOL TAB — Standalone LP + DP pooled inventory planning
 // ══════════════════════════════════════════════════════════════════════════════
+// ── Two-way sync between the main and cpool sales-factor sliders ───────────
+// Conceptually they're the same control. When either moves, mirror the value
+// + label on the other side; both the main scenario and the combined-pool
+// tab then read from a single shared truth.
+function _syncCpoolSF(v) {
+  const slider = document.getElementById('cpool-sf');
+  const disp   = document.getElementById('cpool-sf-disp');
+  if (slider && slider.value !== String(v)) slider.value = v;
+  if (disp)   disp.textContent = v + '%';
+}
+function _syncMainSF(v) {
+  const slider = document.getElementById('sales-factor');
+  const disp   = document.getElementById('sales-factor-disp');
+  if (slider && slider.value !== String(v)) slider.value = v;
+  if (disp)   disp.textContent = v + '%';
+}
+
 function runCombinedPoolTab() {
+  // Sync the cpool slider to the main one before reading — main is canonical.
+  const mainSF = document.getElementById('sales-factor')?.value;
+  if (mainSF !== undefined) _syncCpoolSF(mainSF);
+
   const pair     = document.getElementById('cpool-pair')?.value || '188';
-  const sf       = parseInt(document.getElementById('cpool-sf')?.value || 100) / 100;
+  const sf       = parseInt(document.getElementById('sales-factor')?.value || 100) / 100;
   const horizon  = Math.min(parseInt(document.getElementById('cpool-horizon')?.value || 36), 120);
   const tgtMOH   = parseFloat(document.getElementById('cpool-target-moh')?.value || 18);
   const critMOH  = parseFloat(document.getElementById('cpool-critical-moh')?.value || 16);
@@ -5574,19 +7285,17 @@ function runCombinedPoolTab() {
     const lpCommitted = lpBase[i]?.prod || 0;
     const dpCommitted = dpBase[i]?.prod || 0;
 
-    // Manual overrides
-    const lpOv = (prodOverrides[lpProd] || {})[month];
-    const dpOv = (prodOverrides[dpProd] || {})[month];
-    const lpOvProd = lpOv !== undefined ? lpOv * (lpMeta.batch_size || 1) : null;
-    const dpOvProd = dpOv !== undefined ? dpOv * dpBatch : null;
-
-    let lpProdAmt = (lpOv !== undefined) ? lpOvProd : lpCommitted;
-    let dpProdAmt = (dpOv !== undefined) ? dpOvProd : dpCommitted;
+    // Effective production = override-aware. Shared with runMRP so a Cancel
+    // on the Production tab flows here too (and vice versa).
+    const lpEff = getEffectiveProd(lpProd, month, lpMeta.batch_size || 1, lpCommitted);
+    const dpEff = getEffectiveProd(dpProd, month, dpBatch,                 dpCommitted);
+    let lpProdAmt = lpEff.units;
+    let dpProdAmt = dpEff.units;
 
     // ── SAWTOOTH MRP: schedule additional DP batches if pool short ─────
     // Project EI after demand and committed production
     let mrpAddedDP = 0;
-    if (avgFuture > 0 && dpBatch > 0 && dpOv === undefined) {
+    if (avgFuture > 0 && dpBatch > 0 && !dpEff.fromOverride) {
       const projectedEI_committed = poolBI - demand + lpProdAmt + dpProdAmt;
       const targetEI    = tgtMOH       * avgFuture;
       const overstockEI = overstockMOH * avgFuture;
@@ -5628,7 +7337,10 @@ function runCombinedPoolTab() {
       supplier:  dpSupParams.supplier,
       batchSize: dpBatch,
       mrpAdded:  Math.round(mrpAddedDP),
+      lpCommitted: Math.round(lpCommitted),
       dpCommitted: Math.round(dpCommitted),
+      lpCancelled: lpEff.cancelled,
+      dpCancelled: dpEff.cancelled,
     });
     poolBI = poolEI;
   }
@@ -5717,14 +7429,22 @@ function runCombinedPoolTab() {
   // ── Detail table ──────────────────────────────────────────────────────
   const tbody = document.getElementById('cpool-tbl-body');
   tbody.innerHTML = '';
+  const cancelBadge = `<span style="font-size:9px;font-weight:700;background:#dc2626;color:#fff;border-radius:3px;padding:1px 5px;margin-left:4px;">CANCELLED</span>`;
+  const mrpBadge    = `<span style="font-size:9px;font-weight:700;background:#0891b2;color:#fff;border-radius:3px;padding:1px 5px;margin-left:4px;" title="DP batches added by MRP because the pool projects below target MOH">+MRP</span>`;
   viewRows.forEach(r => {
     const rCls = `risk-${r.risk}`;
+    const lpCell = r.lpCancelled
+      ? `<td style="color:#dc2626;font-weight:600;">${fmt(r.lpCommitted)}${cancelBadge}</td>`
+      : `<td style="color:var(--muted);">${r.lpProd > 0 ? fmt(r.lpProd) : '—'}</td>`;
+    const dpCell = r.dpCancelled
+      ? `<td style="color:#dc2626;font-weight:600;">${fmt(r.dpCommitted)}${cancelBadge}</td>`
+      : `<td style="color:var(--cyan);font-weight:600;">${r.dpProd > 0 ? fmt(r.dpProd) : '—'}${r.mrpAdded > 0 ? mrpBadge : ''}</td>`;
     tbody.innerHTML += `<tr>
       <td>${monthLabel(r.month)}</td>
       <td>${fmt(r.bi)}</td>
       <td>${fmt(r.demand)}</td>
-      <td style="color:var(--muted);">${r.lpProd > 0 ? fmt(r.lpProd) : '—'}</td>
-      <td style="color:var(--cyan);font-weight:600;">${r.dpProd > 0 ? fmt(r.dpProd) : '—'}</td>
+      ${lpCell}
+      ${dpCell}
       <td style="font-weight:600;">${fmt(r.ei)}</td>
       <td>${r.moh >= 900 ? '∞' : r.moh.toFixed(1)}</td>
       <td class="${rCls}"><span class="status-pill status-${r.risk}">${r.risk}</span></td>
@@ -5746,5 +7466,62 @@ function runCombinedPoolTab() {
     <div id="kpi-drill-body"></div>
   </div>
 </div>
+
+<!-- Master Data Modal — multi-tab editor for every embedded data source -->
+<div id="master-data-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9000;align-items:center;justify-content:center;">
+  <div style="background:var(--card);border-radius:10px;width:min(1180px,96vw);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.28);overflow:hidden;border-top:4px solid var(--gold);">
+    <div style="background:var(--navy);color:#fff;padding:12px 18px;display:flex;justify-content:space-between;align-items:center;">
+      <span style="font-size:14px;font-weight:700;">🗃️ Master Data — <span id="md-section-title">Dependencies</span></span>
+      <button onclick="closeMasterDataModal()" title="Close (Esc)" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;line-height:1;padding:0 4px;opacity:0.8;">✕</button>
+    </div>
+    <!-- Tab strip -->
+    <div id="md-tabs" style="display:flex;flex-wrap:wrap;gap:1px;background:var(--border);padding:0;border-bottom:1px solid var(--border);">
+      <button class="md-tab" data-mdtab="deps"      onclick="mdSwitchTab('deps')">🔗 Dependencies</button>
+      <button class="md-tab" data-mdtab="suppliers" onclick="mdSwitchTab('suppliers')">🏭 Suppliers</button>
+      <button class="md-tab" data-mdtab="lots"      onclick="mdSwitchTab('lots')">🧪 Lots</button>
+      <button class="md-tab" data-mdtab="prod"      onclick="mdSwitchTab('prod')">📦 Production</button>
+      <button class="md-tab" data-mdtab="demand"    onclick="mdSwitchTab('demand')">📈 Demand Streams</button>
+      <button class="md-tab" data-mdtab="raw"       onclick="mdSwitchTab('raw')">⚙️ Product Meta</button>
+      <button class="md-tab" data-mdtab="costs"     onclick="mdSwitchTab('costs')">💰 Costs</button>
+    </div>
+    <!-- Toolbar -->
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 18px;background:rgba(26,43,94,0.04);border-bottom:1px solid var(--border);font-size:11px;">
+      <button onclick="mdDownloadCSV()" title="Download current section as CSV"
+              style="font-size:11px;padding:5px 12px;background:#15803d;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;">⬇ Export CSV</button>
+      <label for="md-csv-upload" title="Upload a CSV to replace this section's data (with override layer)"
+             style="font-size:11px;padding:5px 12px;background:var(--navy);color:#fff;border-radius:4px;cursor:pointer;font-weight:600;display:inline-block;">⬆ Import CSV</label>
+      <input type="file" id="md-csv-upload" accept=".csv" style="display:none;" onchange="mdUploadCSV(event)">
+      <button onclick="mdResetTab()" title="Clear overrides for this section and reload from baseline"
+              style="font-size:11px;padding:5px 12px;background:var(--gold);color:var(--navy);border:none;border-radius:4px;cursor:pointer;font-weight:700;">↺ Reset section</button>
+      <span style="flex:1;"></span>
+      <span id="md-section-status" style="color:var(--muted);font-size:11px;"></span>
+      <button onclick="mdResetAll()" title="Wipe overrides across every section and reload from baseline"
+              style="font-size:11px;padding:5px 12px;background:var(--red);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:700;">↺ Reset ALL</button>
+    </div>
+    <!-- Body — populated by mdRender* per tab -->
+    <div id="md-body" style="padding:14px 18px;overflow:auto;flex:1;min-height:0;"></div>
+    <!-- Footer -->
+    <div style="padding:8px 18px;border-top:1px solid var(--border);background:rgba(26,43,94,0.02);font-size:10px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;">
+      <span id="md-footer-summary"></span>
+      <span>Edits persist in localStorage. Reload from workbook via <code>refresh_dashboard.py</code>.</span>
+    </div>
+  </div>
+</div>
+<style>
+  .md-tab {
+    flex:1; min-width:120px; padding:9px 12px; background:#fff; border:none;
+    border-right:1px solid var(--border); cursor:pointer;
+    font-size:12px; font-weight:600; color:var(--navy);
+    border-bottom:3px solid transparent; transition:all .15s;
+  }
+  .md-tab:hover { background:rgba(218,165,32,0.08); }
+  .md-tab.active { background:rgba(218,165,32,0.12); border-bottom-color:var(--gold); }
+  #md-body table { width:100%; border-collapse:collapse; font-size:11px; }
+  #md-body th { background:var(--navy); color:#fff; text-align:left; padding:5px 8px; font-weight:600; position:sticky; top:0; z-index:1; }
+  #md-body td { padding:4px 8px; border-bottom:1px solid var(--border); }
+  #md-body tr:nth-child(even) td { background:rgba(26,43,94,0.02); }
+  #md-body .md-hint { font-size:11px; color:var(--muted); margin:0 0 10px; padding:6px 10px; background:rgba(218,165,32,0.06); border-left:3px solid var(--gold); border-radius:3px; }
+  #md-body input, #md-body select { font-size:11px; padding:1px 4px; }
+</style>
 </body>
 </html>
