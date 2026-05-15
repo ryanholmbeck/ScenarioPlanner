@@ -2460,18 +2460,29 @@ function computeFefoScenario(product, scenRows) {
   let cumulativeConsumed = 0;
   let prevCumulative = 0;
   for (const lot of lots) {
-    prevCumulative     = cumulativeConsumed;
-    cumulativeConsumed += (lot.avail || 0);
+    // On Hold lots are excluded from FEFO consumption — matches the workbook
+    // semantics (cumAvail: 0 on On Hold rows). Skipping them keeps base
+    // baseRunout/baseRisk aligned with the workbook's precomputed values.
+    const isHold = (lot.status === 'On Hold');
+    prevCumulative = cumulativeConsumed;
+    if (!isHold) cumulativeConsumed += (lot.avail || 0);
 
     let consumeStart = null;
     let runout       = null;
-    for (const m of months) {
-      const cd = cumDemand[m] || 0;
-      if (consumeStart === null && cd >= prevCumulative) consumeStart = m;
-      if (cd >= cumulativeConsumed) { runout = m; break; }
+    if (isHold) {
+      // Theoretical placeholder: lot is never consumed under FEFO. Downstream
+      // (buildLotRows) replaces baseRunout/scenRunout with effExp for On Hold.
+      consumeStart = (lot.expiry || '').slice(0,7) + '-01';
+      runout       = consumeStart;
+    } else {
+      for (const m of months) {
+        const cd = cumDemand[m] || 0;
+        if (consumeStart === null && cd >= prevCumulative) consumeStart = m;
+        if (cd >= cumulativeConsumed) { runout = m; break; }
+      }
+      if (!consumeStart) consumeStart = months[0] || (lot.expiry || '').slice(0,7) + '-01';
+      if (!runout)       runout       = (lot.expiry || '').slice(0,7) + '-01';
     }
-    if (!consumeStart) consumeStart = months[0] || (lot.expiry || '').slice(0,7) + '-01';
-    if (!runout)       runout       = (lot.expiry || '').slice(0,7) + '-01';
 
     const expDt  = new Date((lot.expiry || '').slice(0,10));
     const runDt  = new Date(runout);
@@ -2511,6 +2522,14 @@ function computeFefoScenario(product, scenRows) {
   }
   let supplyCursor = months[0] || null;
   for (const lot of result) {
+    const isHold = (lot.status === 'On Hold');
+    if (isHold) {
+      // On Hold lots are out of the FEFO chain — they don't consume demand
+      // and don't advance the supply cursor for the next lot.
+      lot.effectiveStart = null;
+      lot.gapStart = null; lot.gapEnd = null; lot.gapQty = 0;
+      continue;
+    }
     // Effective start = max(natural FEFO start, supply cursor, DOM)
     const naturalStart = lot.consumeStart;
     let effStart = (naturalStart && naturalStart > supplyCursor) ? naturalStart : supplyCursor;
@@ -3036,6 +3055,10 @@ function runScenario() {
   updateExpiryTab(product, displayBRows.concat(baseRows.slice(horizon)), fullScenDemand);
   updateValuationTab(product, displayBRows, displaySRows);
   renderRunwayTab();
+  // Combined Pool reads SUPPLIER_REGISTRY + prodOverrides + sales factor + lot
+  // data, so every scenario re-run must also refresh it — otherwise supplier
+  // edits, lot changes, or factor moves in other tabs leave cpool stale.
+  if (typeof runCombinedPoolTab === 'function') runCombinedPoolTab();
 }
 
 
