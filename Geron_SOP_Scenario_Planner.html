@@ -934,8 +934,8 @@ Month inventory becomes available after lead time">Release Month</th>
           <div style="display:grid;grid-template-columns:repeat(5, minmax(0,1fr)) auto;gap:6px;align-items:center;font-size:11px;">
             <label>Lot ID<br><input id="expiry-add-id"     type="text"   placeholder="lot number"        style="width:100%;font-size:11px;padding:3px;"></label>
             <label>Qty<br>   <input id="expiry-add-qty"    type="number" min="0" step="1"                style="width:100%;font-size:11px;padding:3px;"></label>
-            <label title="Date of manufacture — lot can't be sold before this date.">DOM<br><input id="expiry-add-dom" type="date" style="width:100%;font-size:11px;padding:3px;"></label>
-            <label>Expiry<br><input id="expiry-add-expiry" type="date"                                   style="width:100%;font-size:11px;padding:3px;"></label>
+            <label title="Date of manufacture — lot can't be sold before this date. Triggers auto-fill of Expiry using the product's shelf-life setting.">DOM<br><input id="expiry-add-dom" type="date" onchange="_autoFillExpiryFromDom()" style="width:100%;font-size:11px;padding:3px;"></label>
+            <label title="Auto-filled from DOM + product shelf life when blank. Edit to override.">Expiry<br><input id="expiry-add-expiry" type="date"                                   style="width:100%;font-size:11px;padding:3px;"></label>
             <label>Status<br><select id="expiry-add-status" style="width:100%;font-size:11px;padding:3px;"><option>OK</option><option>On Hold</option><option>At Risk</option></select></label>
             <button onclick="addLotFromExpiryForm()" style="margin-top:14px;font-size:11px;padding:5px 12px;cursor:pointer;background:var(--navy);color:#fff;border:none;border-radius:3px;font-weight:600;">Add</button>
           </div>
@@ -4284,6 +4284,20 @@ function toggleExpiryAddForm() {
   const el = document.getElementById('expiry-add-form');
   if (el) el.style.display = (el.style.display === 'none') ? '' : 'none';
 }
+// Auto-fill the Expiry input from DOM + the current product's shelf life
+// (RAW[product].shelf_life_mo). Skips when the user has already populated
+// Expiry by hand, so edits stick.
+function _autoFillExpiryFromDom() {
+  const domEl = document.getElementById('expiry-add-dom');
+  const expEl = document.getElementById('expiry-add-expiry');
+  if (!domEl || !expEl || !domEl.value) return;
+  if (expEl.value) return;
+  const shelf = (typeof RAW === 'object' && RAW && RAW[currentProduct] && RAW[currentProduct].shelf_life_mo) || 0;
+  if (!shelf) return;
+  const d = new Date(domEl.value);
+  d.setMonth(d.getMonth() + shelf);
+  expEl.value = d.toISOString().slice(0,10);
+}
 function addLotFromExpiryForm() {
   const product = currentProduct;
   const lot     = (document.getElementById('expiry-add-id').value || '').trim();
@@ -6664,9 +6678,22 @@ function mdRenderSuppliers(host) {
       </button>
     </td></tr>`;
   }).join('');
+  const shelfLifeBar = products.length ? `
+    <div style="margin-bottom:10px;padding:8px 10px;background:rgba(26,43,94,0.04);border:1px solid var(--border);border-radius:4px;font-size:11px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;">
+      <b style="white-space:nowrap;">Product shelf life (mo):</b>
+      ${products.map(p => `<label style="display:inline-flex;align-items:center;gap:4px;">
+        <span style="color:var(--navy);">${p}</span>
+        <input type="number" min="0" max="120" step="1" value="${((typeof RAW==='object'&&RAW&&RAW[p])||{}).shelf_life_mo ?? ''}"
+          placeholder="—"
+          onchange="mdSetShelfLife('${safe(p)}', parseInt(this.value)||0)"
+          style="width:48px;text-align:right;font-family:monospace;font-size:11px;">
+      </label>`).join('')}
+      <span style="color:var(--muted);margin-left:auto;">Used by the lot add-forms to auto-fill expiry from DOM.</span>
+    </div>` : '';
   host.innerHTML = `
     <p class="md-hint">Per-product supplier registry. Edit any cell inline — changes flow through <code>setSupplierOverride</code> and re-run the scenario live. Use <b>+ Add supplier</b> at the bottom of each product (or <b>+ New product</b>) to extend the registry. <b>Reset section</b> restores the workbook baseline.</p>
-    <div style="overflow:auto;max-height:62vh;">
+    ${shelfLifeBar}
+    <div style="overflow:auto;max-height:55vh;">
     <table>
       <thead>
         <tr>
@@ -7092,6 +7119,13 @@ function mdAddSupplierRow(product) {
   if (typeof renderSupplierPanel === 'function') renderSupplierPanel();
   if (typeof runScenario === 'function') runScenario();
   mdRenderSuppliers(document.getElementById('md-body'));
+  _mdUpdateStatus();
+}
+function mdSetShelfLife(product, mo) {
+  if (typeof RAW !== 'object' || !RAW) window.RAW = {};
+  if (!RAW[product]) RAW[product] = {};
+  RAW[product].shelf_life_mo = mo;
+  if (typeof runScenario === 'function') runScenario();
   _mdUpdateStatus();
 }
 function mdDeleteSupplierRow(product, supplier) {

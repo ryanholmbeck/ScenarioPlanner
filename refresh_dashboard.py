@@ -683,9 +683,9 @@ def read_fefo_data(wb, prod_data):
     Read Lot Inputs and compute runout / risk for each lot.
 
     Column map (0-indexed):
-      0  Product        1  Lot ID         4  Expiry Date
-      5  Qty Available  6  Qty Reserved   7  Net Available
-      9  Sort Key       10 Notes
+      0  Product        1  Lot ID         3  DOM (ReceiptDate)
+      4  Expiry Date    5  Qty Available  6  Qty Reserved
+      7  Net Available  9  Sort Key       10 Notes
 
     Sort Key (col J, 0-indexed = 9):
       Controls consumption order within each product block.
@@ -706,14 +706,15 @@ def read_fefo_data(wb, prod_data):
         demand_by_product[r["product"]][r["month"]] = r.get("demand", 0)
 
     # Read all lots
-    # Cols (0-indexed): 0=Product 1=LotID 4=Expiry 5=QtyAvail 6=QtyReserved
-    #                   7=NetAvail 9=SortKey
+    # Cols (0-indexed): 0=Product 1=LotID 3=DOM(ReceiptDate) 4=Expiry
+    #                   5=QtyAvail 6=QtyReserved 7=NetAvail 9=SortKey
     lots_by_product = defaultdict(list)
     for ri_vals in ws.iter_rows(min_row=5, values_only=True):
         row = list(ri_vals)
         if not row[0]: continue
         product  = safe_str(row[0])
         lot_id   = safe_str(row[1]) if len(row) > 1 and row[1] else ""
+        dom      = to_iso(row[3]) if len(row) > 3 and row[3] else None
         expiry   = to_iso(row[4]) if len(row) > 4 else None
 
         # Net available: prefer col 7 (formula cache), fallback to col5 - col6
@@ -755,6 +756,7 @@ def read_fefo_data(wb, prod_data):
 
         lots_by_product[product].append({
             "lot_id":   lot_id,
+            "dom":      dom,
             "expiry":   expiry,
             "avail":    net_avail,
             "sort_key": sort_key,
@@ -835,6 +837,7 @@ def read_fefo_data(wb, prod_data):
             result.append({
                 "seq":      seq_counter[product],
                 "lot":      lot["lot_id"],
+                "dom":      lot.get("dom"),
                 "expiry":   lot["expiry"],
                 "runout":   runout_month,
                 "avail":    lot["avail"],
