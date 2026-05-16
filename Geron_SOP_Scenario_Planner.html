@@ -2586,28 +2586,42 @@ function getProductCosts(product) {
   };
 }
 
-function computeProdCost(prodQty, product) {
+// PPI escalator: compounds the per-product annual % from COST_DATA.ppi_base_year.
+// monthIso = "YYYY-MM-DD". Returns 1.0 when ppi_pct is 0 / unset.
+function _ppiFactor(product, monthIso) {
+  const costs = getProductCosts(product) || {};
+  const pct = parseFloat(costs.ppi_pct) || 0;
+  if (!pct || !monthIso) return 1;
+  const baseY = (typeof COST_DATA === 'object' && COST_DATA && COST_DATA.ppi_base_year) || new Date().getFullYear();
+  const y = parseInt((monthIso || '').slice(0,4), 10);
+  if (!isFinite(y) || y <= baseY) return 1;
+  return Math.pow(1 + pct/100, y - baseY);
+}
+
+function computeProdCost(prodQty, product, monthIso) {
   const costs = getProductCosts(product);
   const meta  = getMeta(product);
   const bSize = meta.batch_size || 1;
+  const ppi = _ppiFactor(product, monthIso);
   if (costs.cost_by_batch && costs.prod_cost_batch > 0) {
-    return (prodQty / bSize) * costs.prod_cost_batch;
+    return (prodQty / bSize) * costs.prod_cost_batch * ppi;
   }
-  return prodQty * (costs.prod_cost_uom || costs.inv_value_uom || 0);
+  return prodQty * (costs.prod_cost_uom || costs.inv_value_uom || 0) * ppi;
 }
 
-function computeInvValue(invQty, product) {
+function computeInvValue(invQty, product, monthIso) {
   const costs = getProductCosts(product);
-  return invQty * (costs.inv_value_uom || 0);
+  return invQty * (costs.inv_value_uom || 0) * _ppiFactor(product, monthIso);
 }
 
 function computeBudget(product, baseRows, scenRows) {
   const base = [], scen = [], months = [];
   const minLen = Math.min(baseRows.length, scenRows.length);
   for (let i = 0; i < minLen; i++) {
-    base.push(computeProdCost(baseRows[i].prod || 0, product));
-    scen.push(computeProdCost(scenRows[i].prod || 0, product));
-    months.push(baseRows[i].month);
+    const m = baseRows[i].month;
+    base.push(computeProdCost(baseRows[i].prod || 0, product, m));
+    scen.push(computeProdCost(scenRows[i].prod || 0, product, m));
+    months.push(m);
   }
   return { base, scen, months };
 }
@@ -6601,52 +6615,201 @@ function mdRenderDeps(host) {
 }
 
 function mdRenderSuppliers(host) {
-  const rows = [];
-  if (typeof SUPPLIER_REGISTRY === 'object' && SUPPLIER_REGISTRY) {
-    for (const product of Object.keys(SUPPLIER_REGISTRY).sort()) {
-      for (const r of (SUPPLIER_REGISTRY[product] || [])) {
-        const ov = (supplierOverrides[product]||{})[r.supplier];
-        const eff = ov ? Object.assign({}, r, ov) : r;
-        rows.push({
-          product, supplier: r.supplier,
-          batch_size: eff.batch_size, lead_time: eff.lead_time,
-          target_moh: eff.target_moh, critical_moh: eff.critical_moh, overstock_moh: eff.overstock_moh,
-          active_from: eff.active_from || '', active_through: eff.active_through || '',
-          manual_toggle: eff.manual_toggle ? 1 : 0, primary: eff.primary ? 1 : 0,
-          binding_mo: eff.binding_mo || '', overridden: ov ? 'YES' : '',
-        });
-      }
-    }
-  }
+  const safe = s => String(s).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+  const products = (typeof SUPPLIER_REGISTRY === 'object' && SUPPLIER_REGISTRY) ? Object.keys(SUPPLIER_REGISTRY).sort() : [];
+  const numCell = (p,s,field,val,w) =>
+    `<input type="number" step="any" min="0" value="${val ?? ''}"
+       onchange="mdSetSupplierField('${safe(p)}','${safe(s)}','${field}', parseFloat(this.value)||0)"
+       style="width:${w}px;text-align:right;font-family:monospace;font-size:11px;">`;
+  const dateCell = (p,s,field,val) =>
+    `<input type="date" value="${(val||'').slice(0,10)}"
+       onchange="mdSetSupplierField('${safe(p)}','${safe(s)}','${field}', this.value ? this.value+'T00:00:00' : null)"
+       style="width:128px;font-size:11px;">`;
+  const checkCell = (p,s,field,val) =>
+    `<input type="checkbox" ${val ? 'checked' : ''}
+       onchange="mdSetSupplierField('${safe(p)}','${safe(s)}','${field}', this.checked ? 1 : 0)">`;
+  const productBlocks = products.map(product => {
+    const list = SUPPLIER_REGISTRY[product] || [];
+    const productRows = list.map(r => {
+      const ov = (supplierOverrides[product]||{})[r.supplier];
+      const eff = ov ? Object.assign({}, r, ov) : r;
+      return `<tr>
+        <td>${product}</td>
+        <td style="font-weight:600;">${r.supplier}</td>
+        <td style="text-align:right;">${numCell(product, r.supplier, 'batch_size', eff.batch_size, 70)}</td>
+        <td style="text-align:right;">${numCell(product, r.supplier, 'lead_time', eff.lead_time, 40)}</td>
+        <td style="text-align:right;">${numCell(product, r.supplier, 'target_moh', eff.target_moh, 50)}</td>
+        <td style="text-align:right;">${numCell(product, r.supplier, 'critical_moh', eff.critical_moh, 50)}</td>
+        <td style="text-align:right;">${numCell(product, r.supplier, 'overstock_moh', eff.overstock_moh, 50)}</td>
+        <td>${dateCell(product, r.supplier, 'active_from', eff.active_from)}</td>
+        <td>${dateCell(product, r.supplier, 'active_through', eff.active_through)}</td>
+        <td style="text-align:center;">${checkCell(product, r.supplier, 'manual_toggle', eff.manual_toggle)}</td>
+        <td style="text-align:center;">
+          <input type="radio" name="md-primary-${safe(product)}" ${eff.primary ? 'checked' : ''}
+            onchange="mdSetSupplierPrimary('${safe(product)}','${safe(r.supplier)}')"
+            title="Primary supplier for ${product}">
+        </td>
+        <td style="text-align:center;">${numCell(product, r.supplier, 'binding_mo', eff.binding_mo, 40)}</td>
+        <td style="text-align:center;color:var(--gold);font-weight:700;">${ov ? 'YES' : ''}</td>
+        <td style="text-align:center;">
+          <button title="Delete row" onclick="mdDeleteSupplierRow('${safe(product)}','${safe(r.supplier)}')"
+            style="background:none;border:none;color:var(--red);cursor:pointer;font-weight:700;font-size:13px;line-height:1;">✕</button>
+        </td>
+      </tr>`;
+    }).join('');
+    return productRows + `<tr><td colspan="14" style="text-align:right;background:rgba(218,165,32,0.04);padding:3px 8px;">
+      <button onclick="mdAddSupplierRow('${safe(product)}')"
+        style="font-size:11px;padding:3px 10px;cursor:pointer;background:var(--gold);color:var(--navy);border:none;border-radius:3px;font-weight:600;">
+        + Add supplier to ${product}
+      </button>
+    </td></tr>`;
+  }).join('');
   host.innerHTML = `
-    <p class="md-hint">Per-product supplier registry with time-windowed batch_size / lead_time / MOH targets and active-from/through windows. Edit in the <b>🏭 Suppliers</b> sidebar for the live form; this is the canonical view + CSV pipe.</p>
+    <p class="md-hint">Per-product supplier registry. Edit any cell inline — changes flow through <code>setSupplierOverride</code> and re-run the scenario live. Use <b>+ Add supplier</b> at the bottom of each product (or <b>+ New product</b>) to extend the registry. <b>Reset section</b> restores the workbook baseline.</p>
+    <div style="overflow:auto;max-height:62vh;">
     <table>
-      <thead><tr><th>Product</th><th>Supplier</th><th>Batch</th><th>LT</th><th>Target MOH</th><th>Crit MOH</th><th>Overstock</th><th>Active from</th><th>Active through</th><th>Active</th><th>Primary</th><th>Binding mo</th><th>Ov</th></tr></thead>
-      <tbody>${rows.map(r=>`<tr><td>${r.product}</td><td>${r.supplier}</td><td style="text-align:right;font-family:monospace">${r.batch_size}</td><td style="text-align:right">${r.lead_time}</td><td style="text-align:right">${r.target_moh}</td><td style="text-align:right">${r.critical_moh}</td><td style="text-align:right">${r.overstock_moh}</td><td>${r.active_from.slice(0,10)}</td><td>${r.active_through.slice(0,10)}</td><td style="text-align:center">${r.manual_toggle?'✓':''}</td><td style="text-align:center">${r.primary?'★':''}</td><td style="text-align:center">${r.binding_mo}</td><td style="text-align:center;color:var(--gold);font-weight:700">${r.overridden}</td></tr>`).join('') || '<tr><td colspan="13" style="text-align:center;color:var(--muted);padding:14px;font-style:italic;">No supplier registry.</td></tr>'}</tbody>
-    </table>`;
+      <thead>
+        <tr>
+          <th>Product</th><th>Supplier</th>
+          <th title="Batch size (units / kg)">Batch</th>
+          <th title="Lead time in months">LT</th>
+          <th>Target MOH</th><th>Crit MOH</th><th>Overstock</th>
+          <th>Active from</th><th>Active through</th>
+          <th title="Manual activation flag">Active</th>
+          <th title="Primary supplier (exactly one per product)">Primary</th>
+          <th title="Binding period (months)">Bind mo</th>
+          <th>Ov</th><th></th>
+        </tr>
+      </thead>
+      <tbody>${productBlocks || '<tr><td colspan="14" style="text-align:center;color:var(--muted);padding:14px;font-style:italic;">No supplier registry.</td></tr>'}</tbody>
+    </table>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+      <button onclick="mdAddSupplierRow()"
+        style="font-size:11px;padding:5px 14px;cursor:pointer;background:var(--navy);color:#fff;border:none;border-radius:4px;font-weight:600;">
+        + New product / supplier pair
+      </button>
+      <span style="color:var(--muted);font-size:10px;">Adding rows mutates <code>SUPPLIER_REGISTRY</code> in memory.</span>
+    </div>`;
 }
 
 function mdRenderLots(host) {
-  const rows = [];
-  if (typeof _effectiveFEFOLots === 'function') {
-    for (const l of _effectiveFEFOLots()) {
-      const ov = (lotOverrides[l.product]||{})[l.lot];
-      rows.push({
-        product: l.product, lot: l.lot, seq: l.seq, status: l.status,
-        avail: l.avail, dom: l.dom || '', expiry: (l.expiry||'').slice(0,10),
-        runout: (l.runout||'').slice(0,10),
-        release_deadline: (l.release_deadline||''),
-        cumAvail: l.cumAvail || '', risk: l.risk || 0,
-        overridden: ov ? (ov._added ? 'NEW' : ov._deleted ? 'DEL' : 'EDIT') : '',
-      });
+  const safe = s => String(s).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+  const lots = (typeof _effectiveFEFOLots === 'function') ? _effectiveFEFOLots() : [];
+  // Group lots by product so each product gets its own "+ Add lot" button.
+  const byProduct = {};
+  for (const l of lots) {
+    if (!byProduct[l.product]) byProduct[l.product] = [];
+    byProduct[l.product].push(l);
+  }
+  const products = Object.keys(byProduct).sort();
+  // If we have products in SUPPLIER_REGISTRY that aren't in lots, still surface them so users can add a first lot.
+  if (typeof SUPPLIER_REGISTRY === 'object' && SUPPLIER_REGISTRY) {
+    for (const p of Object.keys(SUPPLIER_REGISTRY)) {
+      if (!byProduct[p]) { byProduct[p] = []; products.push(p); }
     }
   }
+  products.sort();
+  const statusOpts = ['OK','At Risk','On Hold','On Hold - Past Due'];
+  const numCell = (p,lot,field,val,w) =>
+    `<input type="number" step="any" min="0" value="${val ?? ''}"
+       onchange="mdSetLotField('${safe(p)}','${safe(lot)}','${field}', parseFloat(this.value)||0)"
+       style="width:${w}px;text-align:right;font-family:monospace;font-size:11px;">`;
+  const dateCell = (p,lot,field,val) =>
+    `<input type="date" value="${(val||'').slice(0,10)}"
+       onchange="mdSetLotField('${safe(p)}','${safe(lot)}','${field}', this.value || null)"
+       style="width:128px;font-size:11px;">`;
+  const statusCell = (p,lot,val) =>
+    `<select onchange="mdSetLotField('${safe(p)}','${safe(lot)}','status', this.value)" style="font-size:11px;">
+       ${statusOpts.map(o=>`<option ${o===val?'selected':''}>${o}</option>`).join('')}
+     </select>`;
+  const productBlocks = products.map(product => {
+    const rows = (byProduct[product]||[]).map(l => {
+      const ov = (lotOverrides[product]||{})[l.lot];
+      const badge = ov ? (ov._added ? 'NEW' : 'EDIT') : '';
+      return `<tr>
+        <td>${product}</td>
+        <td style="font-family:monospace;font-weight:600;">${l.lot}</td>
+        <td style="text-align:center;">${l.seq || ''}</td>
+        <td>${statusCell(product, l.lot, l.status || 'OK')}</td>
+        <td style="text-align:right;">${numCell(product, l.lot, 'avail', l.avail, 80)}</td>
+        <td>${dateCell(product, l.lot, 'dom', l.dom)}</td>
+        <td>${dateCell(product, l.lot, 'expiry', l.expiry)}</td>
+        <td style="font-size:10px;color:var(--muted);">${(l.runout||'').slice(0,10)}</td>
+        <td>${dateCell(product, l.lot, 'release_deadline', l.release_deadline)}</td>
+        <td style="text-align:right;font-family:monospace;color:var(--muted);">${l.cumAvail || ''}</td>
+        <td style="text-align:right;font-family:monospace;color:${l.risk?'var(--red)':'var(--muted)'};">${l.risk || 0}</td>
+        <td style="text-align:center;color:var(--gold);font-weight:700;">${badge}</td>
+        <td style="text-align:center;">
+          <button title="Delete lot" onclick="mdDeleteLotRow('${safe(product)}','${safe(l.lot)}')"
+            style="background:none;border:none;color:var(--red);cursor:pointer;font-weight:700;font-size:13px;line-height:1;">✕</button>
+        </td>
+      </tr>`;
+    }).join('');
+    return rows + `<tr><td colspan="13" style="text-align:right;background:rgba(218,165,32,0.04);padding:3px 8px;">
+      <button onclick="mdAddLotRowPrompt('${safe(product)}')"
+        style="font-size:11px;padding:3px 10px;cursor:pointer;background:var(--gold);color:var(--navy);border:none;border-radius:3px;font-weight:600;">
+        + Add lot to ${product}
+      </button>
+    </td></tr>`;
+  }).join('');
   host.innerHTML = `
-    <p class="md-hint">Effective lot registry = workbook baseline + your inline edits. The <b>🧪 Lots</b> column inside the <b>Expiry Risk</b> tab is the live editor. Export → tweak in Excel → re-import via this tab to bulk-load lot updates.</p>
+    <p class="md-hint">Effective lot registry = workbook baseline + your inline edits. Edit any cell directly; <b>+ Add lot</b> creates an "_added" override (shown as <b>NEW</b>); <b>✕</b> tombstones a workbook lot or removes an added one. The same data also flows through the <b>Expiry Risk</b> tab's table — they share state.</p>
+    <div style="overflow:auto;max-height:62vh;">
     <table>
-      <thead><tr><th>Product</th><th>Lot</th><th>Seq</th><th>Status</th><th>Avail</th><th>DOM</th><th>Expiry</th><th>Runout</th><th>Release deadline</th><th>cumAvail</th><th>Risk</th><th>Ov</th></tr></thead>
-      <tbody>${rows.map(r=>`<tr><td>${r.product}</td><td style="font-family:monospace">${r.lot}</td><td style="text-align:center">${r.seq}</td><td>${r.status}</td><td style="text-align:right;font-family:monospace">${r.avail}</td><td>${r.dom.slice(0,10)}</td><td>${r.expiry}</td><td>${r.runout}</td><td>${r.release_deadline.slice(0,10)}</td><td style="text-align:right;font-family:monospace">${r.cumAvail}</td><td style="text-align:right;font-family:monospace">${r.risk}</td><td style="text-align:center;color:var(--gold);font-weight:700">${r.overridden}</td></tr>`).join('') || '<tr><td colspan="12" style="text-align:center;color:var(--muted);padding:14px;font-style:italic;">No lots.</td></tr>'}</tbody>
-    </table>`;
+      <thead>
+        <tr>
+          <th>Product</th><th>Lot</th><th>Seq</th><th>Status</th>
+          <th>Avail</th><th>DOM</th><th>Expiry</th><th>Runout</th>
+          <th>Release deadline</th><th>cumAvail</th><th>Risk</th>
+          <th>Ov</th><th></th>
+        </tr>
+      </thead>
+      <tbody>${productBlocks || '<tr><td colspan="13" style="text-align:center;color:var(--muted);padding:14px;font-style:italic;">No lots.</td></tr>'}</tbody>
+    </table>
+    </div>`;
+}
+
+// ── Lot CRUD helpers (Master Data Lots tab) ───────────────────────────────
+// Inline edit → setLotOverride; add → addNewLot (uses _added flag); delete →
+// deleteLot (tombstones workbook lots, hard-deletes added ones).
+function mdSetLotField(product, lot, field, value) {
+  if (typeof setLotOverride === 'function') {
+    setLotOverride(product, lot, { [field]: value });
+  }
+  if (typeof runScenario === 'function') runScenario();
+  if (typeof updateExpiryTab === 'function' && typeof currentProduct !== 'undefined' && currentProduct === product) {
+    try { updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); } catch (e) {}
+  }
+  _mdUpdateStatus();
+}
+function mdAddLotRowPrompt(product) {
+  const lot = (prompt(`New lot ID for ${product}:`) || '').trim();
+  if (!lot) return;
+  if (_effectiveFEFOLots().some(l => l.product === product && l.lot === lot)) {
+    alert(`Lot id "${lot}" already exists for ${product}.`); return;
+  }
+  // Default shelf life from RAW[product].shelf_life_mo if set, else 24 months from today.
+  const today = new Date().toISOString().slice(0,10);
+  const shelf = (typeof RAW === 'object' && RAW && RAW[product] && RAW[product].shelf_life_mo) || 24;
+  const expDate = new Date(); expDate.setMonth(expDate.getMonth() + shelf);
+  if (typeof addNewLot === 'function') {
+    addNewLot(product, {
+      lot, avail: 0, dom: today,
+      expiry: expDate.toISOString().slice(0,10),
+      status: 'OK',
+    });
+  }
+  if (typeof runScenario === 'function') runScenario();
+  mdRenderLots(document.getElementById('md-body'));
+  _mdUpdateStatus();
+}
+function mdDeleteLotRow(product, lot) {
+  if (!confirm(`Delete lot "${lot}" from ${product}?`)) return;
+  if (typeof deleteLot === 'function') deleteLot(product, lot);
+  if (typeof runScenario === 'function') runScenario();
+  mdRenderLots(document.getElementById('md-body'));
+  _mdUpdateStatus();
 }
 
 function mdRenderProd(host) {
@@ -6659,9 +6822,24 @@ function mdRenderProd(host) {
     host.innerHTML = '<p class="md-hint">No <code>PROD_INPUTS</code> data loaded. Run <code>refresh_dashboard.py</code> against the workbook to populate.</p>';
     return;
   }
-  // Union of months across products, sorted
+  // Union of months across products, then extend forward to the planning
+  // horizon (default Dec 2040). Empty cells render editable so the user can
+  // fill in long-range production without touching the workbook.
+  const horizonEnd = (typeof PROD_HORIZON_END === 'string' && PROD_HORIZON_END) || '2040-12-01';
   const monthSet = new Set();
   inputs.forEach(p => (p.months||[]).forEach(m => monthSet.add(m.month)));
+  let earliest = null;
+  for (const m of monthSet) { if (!earliest || m < earliest) earliest = m; }
+  if (!earliest) {
+    const t = new Date(); earliest = t.toISOString().slice(0,7) + '-01';
+  }
+  // Generate every month from earliest → horizonEnd inclusive.
+  const cur = new Date(earliest);
+  const end = new Date(horizonEnd);
+  while (cur <= end) {
+    monthSet.add(cur.toISOString().slice(0,7) + '-01');
+    cur.setMonth(cur.getMonth() + 1);
+  }
   const months = Array.from(monthSet).sort();
   const fmtMo = m => {
     const d = new Date(m);
@@ -6788,10 +6966,20 @@ function mdSetRaw(product, field, value) {
 function mdRenderCosts(host) {
   const products = (typeof COST_DATA === 'object' && COST_DATA && COST_DATA.products) ? Object.keys(COST_DATA.products).sort() : [];
   const safe = s => String(s).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+  const baseYear = (typeof COST_DATA === 'object' && COST_DATA && COST_DATA.ppi_base_year) || new Date().getFullYear();
   host.innerHTML = `
-    <p class="md-hint">Per-product cost data — edit inline. Drives <b>Inventory Valuation</b> and <b>Budget Impact</b> tabs. "Cost by batch?" toggles between per-batch and per-UoM production cost models.</p>
+    <p class="md-hint">Per-product cost data — edit inline. Drives <b>Inventory Valuation</b> and <b>Budget Impact</b> tabs.<br>
+      "Cost by batch?" toggles between per-batch and per-UoM production cost models. <b>PPI %</b> compounds annually from the base year — year-N cost = base × (1 + PPI/100)<sup>N − base</sup>.</p>
+    <div style="display:flex;gap:18px;align-items:center;margin-bottom:8px;font-size:11px;">
+      <label>PPI base year:
+        <input type="number" min="2020" max="2050" step="1" value="${baseYear}"
+          onchange="mdSetPpiBaseYear(parseInt(this.value)||${new Date().getFullYear()})"
+          style="width:60px;text-align:right;font-family:monospace;">
+      </label>
+      <span style="color:var(--muted);">PPI % below escalates each product's cost from this year forward.</span>
+    </div>
     <table>
-      <thead><tr><th>Product</th><th>Inv value / UoM</th><th>Prod cost / batch</th><th>Prod cost / UoM</th><th>By batch?</th><th>Unit</th><th>Supplier</th></tr></thead>
+      <thead><tr><th>Product</th><th>Inv value / UoM</th><th>Prod cost / batch</th><th>Prod cost / UoM</th><th>By batch?</th><th>Unit</th><th>Supplier</th><th title="Annual PPI escalator %, compounds from base year">PPI %</th><th></th></tr></thead>
       <tbody>${products.map(p=>{ const r = (COST_DATA.products||{})[p]||{}; return `<tr>
         <td><b>${p}</b></td>
         <td><input type="number" step="any" min="0" value="${r.inv_value_uom   || 0}" onchange="mdSetCost('${safe(p)}','inv_value_uom',  parseFloat(this.value)||0)" style="width:100px;text-align:right;font-family:monospace;"></td>
@@ -6800,8 +6988,49 @@ function mdRenderCosts(host) {
         <td style="text-align:center;"><input type="checkbox" ${r.cost_by_batch ? 'checked' : ''} onchange="mdSetCost('${safe(p)}','cost_by_batch', this.checked)"></td>
         <td><input type="text" value="${safe(r.unit||'units')}" onchange="mdSetCost('${safe(p)}','unit', this.value)" style="width:60px;"></td>
         <td><input type="text" value="${safe(r.supplier||'')}"  onchange="mdSetCost('${safe(p)}','supplier', this.value)" style="width:180px;"></td>
-      </tr>`; }).join('')}</tbody>
-    </table>`;
+        <td><input type="number" step="0.1" min="0" max="100" value="${r.ppi_pct ?? 0}" onchange="mdSetCost('${safe(p)}','ppi_pct', parseFloat(this.value)||0)" style="width:55px;text-align:right;font-family:monospace;"> %</td>
+        <td style="text-align:center;">
+          <button title="Delete cost line" onclick="mdDeleteCostRow('${safe(p)}')"
+            style="background:none;border:none;color:var(--red);cursor:pointer;font-weight:700;font-size:13px;line-height:1;">✕</button>
+        </td>
+      </tr>`; }).join('') || '<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:14px;font-style:italic;">No cost rows.</td></tr>'}</tbody>
+    </table>
+    <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+      <button onclick="mdAddCostRow()"
+        style="font-size:11px;padding:5px 14px;cursor:pointer;background:var(--navy);color:#fff;border:none;border-radius:4px;font-weight:600;">
+        + Add cost line
+      </button>
+      <span style="color:var(--muted);font-size:10px;">Adds to <code>COST_DATA.products</code>. <b>Reset section</b> restores baseline.</span>
+    </div>`;
+}
+function mdSetPpiBaseYear(y) {
+  if (typeof COST_DATA !== 'object' || !COST_DATA) window.COST_DATA = {};
+  COST_DATA.ppi_base_year = y;
+  if (typeof runScenario === 'function') runScenario();
+  _mdUpdateStatus();
+}
+function mdAddCostRow() {
+  const product = (prompt('Product name for new cost line:') || '').trim();
+  if (!product) return;
+  if (typeof COST_DATA !== 'object' || !COST_DATA) window.COST_DATA = { products:{} };
+  if (!COST_DATA.products) COST_DATA.products = {};
+  if (COST_DATA.products[product]) {
+    alert(`Cost line for "${product}" already exists.`); return;
+  }
+  COST_DATA.products[product] = {
+    inv_value_uom: 0, prod_cost_batch: 0, prod_cost_uom: 0,
+    cost_by_batch: false, unit: 'units', supplier: '', ppi_pct: 0,
+  };
+  if (typeof runScenario === 'function') runScenario();
+  mdRenderCosts(document.getElementById('md-body'));
+  _mdUpdateStatus();
+}
+function mdDeleteCostRow(product) {
+  if (!confirm(`Delete cost line "${product}"?`)) return;
+  if (COST_DATA && COST_DATA.products) delete COST_DATA.products[product];
+  if (typeof runScenario === 'function') runScenario();
+  mdRenderCosts(document.getElementById('md-body'));
+  _mdUpdateStatus();
 }
 
 function mdSetCost(product, field, value) {
@@ -6810,6 +7039,75 @@ function mdSetCost(product, field, value) {
   if (!COST_DATA.products[product]) COST_DATA.products[product] = {};
   COST_DATA.products[product][field] = value;
   if (typeof runScenario === 'function') runScenario();
+  _mdUpdateStatus();
+}
+
+// ── Supplier CRUD helpers (Master Data Suppliers tab) ─────────────────────
+// Inline-edit goes through setSupplierOverride so it stacks on the workbook
+// baseline; add/delete mutate SUPPLIER_REGISTRY in place and "Reset section"
+// restores from the modal-open snapshot.
+function mdSetSupplierField(product, supplier, field, value) {
+  if (typeof setSupplierOverride === 'function') {
+    setSupplierOverride(product, supplier, { [field]: value });
+  }
+  if (typeof renderSupplierPanel === 'function') renderSupplierPanel();
+  if (typeof runScenario === 'function') runScenario();
+  _mdUpdateStatus();
+}
+function mdSetSupplierPrimary(product, supplier) {
+  if (typeof SUPPLIER_REGISTRY === 'object' && SUPPLIER_REGISTRY[product]) {
+    SUPPLIER_REGISTRY[product].forEach(r => {
+      if (typeof setSupplierOverride === 'function') {
+        setSupplierOverride(product, r.supplier, { primary: r.supplier === supplier ? 1 : 0 });
+      }
+    });
+  }
+  if (typeof renderSupplierPanel === 'function') renderSupplierPanel();
+  if (typeof runScenario === 'function') runScenario();
+  if (mdActiveTab === 'suppliers') mdRenderSuppliers(document.getElementById('md-body'));
+}
+function mdAddSupplierRow(product) {
+  if (!product) {
+    product = (prompt('Product for new supplier row (e.g. "188mg LP", "Drug Substance"):') || '').trim();
+    if (!product) return;
+  }
+  const supplier = (prompt(`Supplier name for ${product}:`) || '').trim();
+  if (!supplier) return;
+  if (typeof SUPPLIER_REGISTRY !== 'object' || !SUPPLIER_REGISTRY) window.SUPPLIER_REGISTRY = {};
+  if (!SUPPLIER_REGISTRY[product]) SUPPLIER_REGISTRY[product] = [];
+  if (SUPPLIER_REGISTRY[product].some(r => r.supplier === supplier)) {
+    alert(`Supplier "${supplier}" already exists for ${product}.`);
+    return;
+  }
+  // Inherit category/unit from an existing row on the same product when available.
+  const seed = SUPPLIER_REGISTRY[product][0] || {};
+  SUPPLIER_REGISTRY[product].push({
+    supplier, batch_size: seed.batch_size || 0, lead_time: seed.lead_time || 3,
+    target_moh: seed.target_moh || 9, critical_moh: seed.critical_moh || 6,
+    overstock_moh: seed.overstock_moh || 18,
+    active_from: null, active_through: null,
+    manual_toggle: 1, primary: SUPPLIER_REGISTRY[product].length === 0 ? 1 : 0,
+    binding_mo: 9, category: seed.category || '', unit: seed.unit || 'units', notes: '',
+  });
+  if (typeof renderSupplierPanel === 'function') renderSupplierPanel();
+  if (typeof runScenario === 'function') runScenario();
+  mdRenderSuppliers(document.getElementById('md-body'));
+  _mdUpdateStatus();
+}
+function mdDeleteSupplierRow(product, supplier) {
+  if (!confirm(`Delete supplier "${supplier}" from "${product}"?\n\nThis also clears any overrides on that row.`)) return;
+  if (SUPPLIER_REGISTRY[product]) {
+    SUPPLIER_REGISTRY[product] = SUPPLIER_REGISTRY[product].filter(r => r.supplier !== supplier);
+    if (!SUPPLIER_REGISTRY[product].length) delete SUPPLIER_REGISTRY[product];
+  }
+  if (supplierOverrides[product]) {
+    delete supplierOverrides[product][supplier];
+    if (!Object.keys(supplierOverrides[product] || {}).length) delete supplierOverrides[product];
+    if (typeof _persistSupplierOverrides === 'function') _persistSupplierOverrides();
+  }
+  if (typeof renderSupplierPanel === 'function') renderSupplierPanel();
+  if (typeof runScenario === 'function') runScenario();
+  mdRenderSuppliers(document.getElementById('md-body'));
   _mdUpdateStatus();
 }
 
@@ -7124,7 +7422,10 @@ function mdResetTab() {
   if (!confirm('Clear all changes in this section and reload from baseline? This affects only the current tab.')) return;
   switch (mdActiveTab) {
     case 'lots':      lotOverrides      = {}; if (typeof _persistLotOverrides      === 'function') _persistLotOverrides();      break;
-    case 'suppliers': supplierOverrides = {}; if (typeof _persistSupplierOverrides === 'function') _persistSupplierOverrides(); break;
+    case 'suppliers': supplierOverrides = {};
+                      if (typeof _persistSupplierOverrides === 'function') _persistSupplierOverrides();
+                      if (mdBaselines.SUPPLIER_REGISTRY) window.SUPPLIER_REGISTRY = JSON.parse(JSON.stringify(mdBaselines.SUPPLIER_REGISTRY));
+                      break;
     case 'deps':      if (typeof clearAllDepOverrides === 'function') clearAllDepOverrides();
                       if (mdBaselines.DEPENDENCIES_FULL) window.DEPENDENCIES_FULL = JSON.parse(JSON.stringify(mdBaselines.DEPENDENCIES_FULL));
                       break;
@@ -7152,6 +7453,8 @@ function mdResetAll() {
   if (mdBaselines.RAW)               window.RAW               = JSON.parse(JSON.stringify(mdBaselines.RAW));
   if (mdBaselines.COST_DATA)         window.COST_DATA         = JSON.parse(JSON.stringify(mdBaselines.COST_DATA));
   if (mdBaselines.DEPENDENCIES_FULL) window.DEPENDENCIES_FULL = JSON.parse(JSON.stringify(mdBaselines.DEPENDENCIES_FULL));
+  if (mdBaselines.SUPPLIER_REGISTRY) window.SUPPLIER_REGISTRY = JSON.parse(JSON.stringify(mdBaselines.SUPPLIER_REGISTRY));
+  if (mdBaselines.FEFO_LOTS)         window.FEFO_LOTS         = JSON.parse(JSON.stringify(mdBaselines.FEFO_LOTS));
   if (typeof _persistLotOverrides      === 'function') _persistLotOverrides();
   if (typeof _persistSupplierOverrides === 'function') _persistSupplierOverrides();
   mdSwitchTab(mdActiveTab);
