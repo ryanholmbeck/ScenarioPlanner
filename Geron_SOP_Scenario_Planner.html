@@ -493,6 +493,20 @@
                title="Region AND indication must both be checked for a stream to contribute demand.">Indication Filter</label>
         <div id="indication-toggles-container" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px;"></div>
 
+        <label style="margin-top:10px;display:block;font-weight:600;"
+               title="Force EU demand to 47mg-only between the two dates (US is unaffected). EU 188mg demand converts to 47mg at a 4:1 ratio per dose; outside the window, both strengths resume normally.">EU 47mg-only window</label>
+        <div class="row2" style="margin-top:4px;">
+          <div>
+            <label style="font-size:10px;color:var(--muted);">From</label>
+            <input type="date" id="eu-carve-from" value="" oninput="runScenario(); runCombinedPoolTab && runCombinedPoolTab();">
+          </div>
+          <div>
+            <label style="font-size:10px;color:var(--muted);">Cutover back</label>
+            <input type="date" id="eu-carve-to"   value="" oninput="runScenario(); runCombinedPoolTab && runCombinedPoolTab();">
+          </div>
+        </div>
+        <div id="eu-carve-status" style="font-size:10px;color:var(--muted);margin-top:2px;">Both blank = carve-out off.</div>
+
         <label style="margin-top:8px;">Upload Custom Demand Template</label>
         <button onclick="downloadDemandTemplate()" style="width:100%;margin-bottom:6px;padding:7px;background:#005EB8;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;">📥 Download CSV Template</button>
         <div class="upload-area" onclick="document.getElementById('demand-upload').click()">
@@ -794,6 +808,13 @@ Based on scenario MOH vs target and critical thresholds">Risk</th>
         <div class="chart-container" style="height:220px;">
           <canvas id="chart-production"></canvas>
         </div>
+      </div>
+      <div class="card" id="prod-capacity-card" style="display:none;">
+        <div class="card-header">
+          <div class="card-title">Supplier Capacity &amp; MOQ Flags <span style="font-size:11px;color:var(--muted);font-weight:400;">— soft warnings, scheduler still runs</span></div>
+          <div class="card-subtitle" style="margin-top:2px;">Months/years over the cap_per_month / cap_per_year set on the <b>📜 Supplier Contracts</b> tab show red; calendar years under <b>MOQ/yr</b> after commercialization show gold.</div>
+        </div>
+        <div id="prod-capacity-body" style="font-size:11px;padding:6px 0;"></div>
       </div>
       <div class="card" id="prod-override-card">
         <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
@@ -1428,7 +1449,10 @@ function streamMatchesFilters(key, region, product, activeIndications = null) {
 }
 
 function getRegionDemandByMonth(product, region, streamSource, activeIndications = null) {
-  const src = streamSource || DEMAND_BY_STREAM || {};
+  // When the caller doesn't pass a stream source we default to the baseline,
+  // but pipe it through the EU 47mg carve-out so every consumer sees the same
+  // demand surface.
+  const src = streamSource || _carvedOutStreams(DEMAND_BY_STREAM) || {};
   const byMonth = {};
   for (const [key, entries] of Object.entries(src)) {
     if (!streamMatchesFilters(key, region, product, activeIndications)) continue;
@@ -1437,10 +1461,59 @@ function getRegionDemandByMonth(product, region, streamSource, activeIndications
   return byMonth;
 }
 
+// EU 47mg-only carve-out: during the user-chosen window, every EU LP stream
+// at the 188mg strength flips its demand to 0 and that demand (× the EU-to-47
+// conversion ratio, default 4) is moved onto its 47mg sister stream. Outside
+// the window the streams pass through untouched. Returns a deep-copied object
+// when a window is active so callers can mutate without corrupting the base.
+function _euCarveWindow() {
+  const f = (document.getElementById('eu-carve-from')||{}).value;
+  const t = (document.getElementById('eu-carve-to')||{}).value;
+  if (!f && !t) return null;
+  return { from: f || null, to: t || null };
+}
+function _inEuCarveWindow(monthIso, w) {
+  if (!w) return false;
+  const m = (monthIso||'').slice(0,10);
+  return (!w.from || m >= w.from) && (!w.to || m <= w.to);
+}
+function _carvedOutStreams(src) {
+  const w = _euCarveWindow();
+  const status = document.getElementById('eu-carve-status');
+  if (!w || !src) {
+    if (status) status.textContent = 'Both blank = carve-out off.';
+    return src;
+  }
+  if (status) status.textContent = `Active ${w.from||'…'} → ${w.to||'…'} — EU 188mg demand routed onto 47mg`;
+  // Ratio defaults to 4 (matches the existing 188→47 conv-ratio input when present).
+  const ratio = parseFloat((document.getElementById('conv-ratio')||{}).value) || 4;
+  const isEu188 = k => /^EU\b.*\(188mg LP\)\s*$/.test(k);
+  const sister  = k => k.replace('(188mg LP)','(47mg LP)');
+  const out = {};
+  for (const k of Object.keys(src)) out[k] = (src[k]||[]).map(r => Object.assign({}, r));
+  for (const k of Object.keys(out)) {
+    if (!isEu188(k)) continue;
+    const sk = sister(k);
+    if (!out[sk]) out[sk] = [];
+    const sByMonth = {};
+    for (const e of out[sk]) sByMonth[e.m] = e;
+    for (const e of out[k]) {
+      if (!_inEuCarveWindow(e.m, w)) continue;
+      const converted = (e.d || 0) * ratio;
+      e.d = 0;
+      if (sByMonth[e.m]) sByMonth[e.m].d += converted;
+      else { const ne = { m: e.m, d: converted }; out[sk].push(ne); sByMonth[e.m] = ne; }
+    }
+    out[sk].sort((a,b) => (a.m||'').localeCompare(b.m||''));
+  }
+  return out;
+}
+
 // Build a merged stream view: baseline overridden/extended by customStreams
 function getMergedStreams() {
-  if (!customStreams) return DEMAND_BY_STREAM || {};
-  return Object.assign({}, DEMAND_BY_STREAM || {}, customStreams);
+  const base = _carvedOutStreams(DEMAND_BY_STREAM || {}) || {};
+  if (!customStreams) return base;
+  return Object.assign({}, base, customStreams);
 }
 
 // Core row-builder — streamSource controls base vs scenario
@@ -1759,7 +1832,7 @@ function applyDerivedDemand(childBaseRows, derivedDemandByMonth) {
 }
 
 function getBaseRows(product) {
-  const rows = _buildRows(product, DEMAND_BY_STREAM || {});
+  const rows = _buildRows(product, _carvedOutStreams(DEMAND_BY_STREAM) || {});
   // For DP products: offset demand by lead time (LP prod at month+lt drives DP demand at month)
   if (product === '200mg DP') return applyDPLeadTimeOffset(rows, '188mg LP');
   if (product === '50mg DP')  return applyDPLeadTimeOffset(rows, '47mg LP');
@@ -3406,7 +3479,70 @@ function updateDemandTab(product, baseRows, scenRows, salesFactor) {
 // ══════════════════════════════════════════════════════════════════════════════
 //  TAB: PRODUCTION
 // ══════════════════════════════════════════════════════════════════════════════
+// Soft-warning panel above the production override card. Surfaces months
+// over cap_per_month, calendar years over cap_per_year, and years under
+// MOQ_per_year (post-commercialization) for the active product's primary
+// supplier. Scheduler isn't constrained by these — flags are advisory.
+function _renderCapacityFlags(product, scenRows, meta) {
+  const card = document.getElementById('prod-capacity-card');
+  const body = document.getElementById('prod-capacity-body');
+  if (!card || !body) return;
+  const sup = (typeof _primarySupplierFor === 'function') ? _primarySupplierFor(product) : null;
+  if (!sup) { card.style.display = 'none'; return; }
+  const bSize = (meta && meta.batch_size) || sup.batch_size || 1;
+  const capM = parseFloat(sup.cap_per_month) || 0;
+  const capY = parseFloat(sup.cap_per_year)  || 0;
+  const moq  = parseFloat(sup.moq_per_year)  || 0;
+  const commDate = (sup.commercialization_date || sup.active_from || '').slice(0,10);
+  if (!capM && !capY && !moq) { card.style.display = 'none'; return; }
+  const yearBatches = {};
+  const monthFlags  = [];
+  for (const r of scenRows) {
+    const batches = (r.prod || 0) / (bSize || 1);
+    const m = r.month || '';
+    const y = m.slice(0,4);
+    yearBatches[y] = (yearBatches[y] || 0) + batches;
+    if (capM && batches > capM + 0.001) monthFlags.push({ month: m, batches });
+  }
+  const yearFlags = [];
+  const moqFlags  = [];
+  for (const y of Object.keys(yearBatches).sort()) {
+    const b = yearBatches[y];
+    if (capY && b > capY + 0.001) yearFlags.push({ y, b });
+    if (moq && (!commDate || y >= commDate.slice(0,4)) && b < moq - 0.001) {
+      moqFlags.push({ y, b, shortfall: moq - b });
+    }
+  }
+  if (!monthFlags.length && !yearFlags.length && !moqFlags.length) {
+    body.innerHTML = `<span style="color:#15803d;font-weight:600;">✓ No capacity breaches or MOQ shortfalls for ${product} (${sup.supplier}).</span>`;
+    card.style.display = '';
+    return;
+  }
+  const blocks = [];
+  if (monthFlags.length) {
+    blocks.push(`<div style="margin-bottom:6px;">
+      <span style="color:var(--red);font-weight:700;">▲ ${monthFlags.length} month${monthFlags.length===1?'':'s'} over cap (${capM}/mo):</span>
+      <span style="color:var(--muted);font-size:10px;">${monthFlags.slice(0,12).map(f=>`${f.month.slice(0,7)} (${f.batches.toFixed(1)})`).join(', ')}${monthFlags.length>12?' …':''}</span>
+    </div>`);
+  }
+  if (yearFlags.length) {
+    blocks.push(`<div style="margin-bottom:6px;">
+      <span style="color:var(--red);font-weight:700;">▲ ${yearFlags.length} year${yearFlags.length===1?'':'s'} over cap (${capY}/yr):</span>
+      <span style="color:var(--muted);font-size:10px;">${yearFlags.map(f=>`${f.y} (${f.b.toFixed(1)})`).join(', ')}</span>
+    </div>`);
+  }
+  if (moqFlags.length) {
+    blocks.push(`<div style="margin-bottom:6px;">
+      <span style="color:var(--gold);font-weight:700;">▼ ${moqFlags.length} year${moqFlags.length===1?'':'s'} under MOQ (${moq}/yr${commDate?', from '+commDate.slice(0,7):''}):</span>
+      <span style="color:var(--muted);font-size:10px;">${moqFlags.map(f=>`${f.y} (${f.b.toFixed(1)}, short ${f.shortfall.toFixed(1)})`).join(', ')}</span>
+    </div>`);
+  }
+  body.innerHTML = blocks.join('');
+  card.style.display = '';
+}
+
 function updateProductionTab(product, baseRows, scenRows, meta) {
+  _renderCapacityFlags(product, scenRows, meta);
   const horizon = Math.min(baseRows.length, scenRows.length);
   const pMonths = baseRows.slice(0, horizon).map(r => r.month);
   const bProd_r = baseRows.slice(0, horizon).map(r => r.prod);
