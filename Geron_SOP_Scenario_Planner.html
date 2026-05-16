@@ -2614,13 +2614,53 @@ function computeInvValue(invQty, product, monthIso) {
   return invQty * (costs.inv_value_uom || 0) * _ppiFactor(product, monthIso);
 }
 
+// Primary supplier row (post-override) for a product. Used to read contract
+// fields (tier_discounts, blackouts, capacity caps, MOQ).
+function _primarySupplierFor(product) {
+  const list = (typeof SUPPLIER_REGISTRY === 'object' && SUPPLIER_REGISTRY && SUPPLIER_REGISTRY[product]) || [];
+  if (!list.length) return null;
+  const merge = r => {
+    const ov = (supplierOverrides[product]||{})[r.supplier];
+    return ov ? Object.assign({}, r, ov) : r;
+  };
+  for (const r of list) { const eff = merge(r); if (eff.primary) return eff; }
+  return merge(list[0]);
+}
+
+// Additive tier discount: sum every tier whose min_batches threshold is met
+// by the calendar-year batch count. To switch to "replace lower" semantics,
+// pick the highest matching tier's pct alone; to switch to multiplicative,
+// fold the matches with (1 - pct/100) factors instead of summing.
+function _supplierDiscountPct(tiers, batchCount) {
+  if (!Array.isArray(tiers) || !tiers.length || !batchCount) return 0;
+  let total = 0;
+  for (const t of tiers) {
+    if ((parseFloat(t.min_batches) || 0) <= batchCount) total += (parseFloat(t.pct) || 0);
+  }
+  return Math.min(total, 100);
+}
+
 function computeBudget(product, baseRows, scenRows) {
   const base = [], scen = [], months = [];
   const minLen = Math.min(baseRows.length, scenRows.length);
+  // Pre-pass: calendar-year batch counts for base and scenario. Tier discount
+  // is applied against the year's total, then folded back into each month.
+  const bSize = (getMeta(product).batch_size) || 1;
+  const baseYr = {}, scenYr = {};
+  for (let i = 0; i < minLen; i++) {
+    const y = (baseRows[i].month||'').slice(0,4);
+    baseYr[y] = (baseYr[y] || 0) + ((baseRows[i].prod || 0) / bSize);
+    scenYr[y] = (scenYr[y] || 0) + ((scenRows[i].prod || 0) / bSize);
+  }
+  const primary = _primarySupplierFor(product);
+  const tiers = (primary && primary.tier_discounts) || [];
   for (let i = 0; i < minLen; i++) {
     const m = baseRows[i].month;
-    base.push(computeProdCost(baseRows[i].prod || 0, product, m));
-    scen.push(computeProdCost(scenRows[i].prod || 0, product, m));
+    const y = (m||'').slice(0,4);
+    const bFactor = 1 - _supplierDiscountPct(tiers, baseYr[y] || 0) / 100;
+    const sFactor = 1 - _supplierDiscountPct(tiers, scenYr[y] || 0) / 100;
+    base.push(computeProdCost(baseRows[i].prod || 0, product, m) * bFactor);
+    scen.push(computeProdCost(scenRows[i].prod || 0, product, m) * sFactor);
     months.push(m);
   }
   return { base, scen, months };
@@ -6511,7 +6551,7 @@ function mdSwitchTab(name) {
   document.querySelectorAll('.md-tab').forEach(b => {
     b.classList.toggle('active', b.getAttribute('data-mdtab') === name);
   });
-  const titles = { deps:'Dependencies', suppliers:'Suppliers', lots:'Lots', prod:'Production', demand:'Demand Streams', raw:'Product Meta', costs:'Costs' };
+  const titles = { deps:'Dependencies', suppliers:'Suppliers', lots:'Lots', prod:'Production', demand:'Demand Streams', raw:'Supplier Contracts', costs:'Costs' };
   document.getElementById('md-section-title').textContent = titles[name] || name;
   const body = document.getElementById('md-body');
   body.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted);">Loading…</div>';
@@ -6960,26 +7000,158 @@ function mdRenderDemand(host) {
 }
 
 function mdRenderRaw(host) {
-  // Inline-editable. Each cell writes through mdSetRaw which triggers
-  // runScenario; Reset section restores the baseline snapshot.
-  const products = (typeof RAW === 'object' && RAW) ? Object.keys(RAW).sort() : [];
+  // Supplier Contracts: per-product/supplier rows capturing the contractual
+  // wrappers around the Suppliers tab basics — commercialization date, annual
+  // MOQ, monthly/annual batch capacity caps, blackout periods, and batch-count
+  // cost tiers. All written through setSupplierOverride so they layer on the
+  // workbook baseline and survive Reset section.
   const safe = s => String(s).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+  const products = (typeof SUPPLIER_REGISTRY === 'object' && SUPPLIER_REGISTRY) ? Object.keys(SUPPLIER_REGISTRY).sort() : [];
+  if (!products.length) {
+    host.innerHTML = '<p class="md-hint">No supplier registry loaded.</p>';
+    return;
+  }
+  const numCell = (p,s,field,val,w,extra) =>
+    `<input type="number" step="any" min="0" value="${val ?? ''}"
+       onchange="mdSetSupplierField('${safe(p)}','${safe(s)}','${field}', parseFloat(this.value)||0)"
+       style="width:${w}px;text-align:right;font-family:monospace;font-size:11px;${extra||''}">`;
+  const dateCell = (p,s,field,val) =>
+    `<input type="date" value="${(val||'').slice(0,10)}"
+       onchange="mdSetSupplierField('${safe(p)}','${safe(s)}','${field}', this.value || null)"
+       style="width:130px;font-size:11px;">`;
+  const blackoutsList = (p, s, list) => {
+    const items = (list||[]).map((b,i) => `
+      <div style="display:flex;gap:4px;align-items:center;margin:2px 0;font-size:10px;">
+        <input type="date" value="${(b.from||'').slice(0,10)}"
+          onchange="mdSetBlackoutField('${safe(p)}','${safe(s)}',${i},'from',this.value)"
+          style="width:115px;font-size:10px;">
+        <span>→</span>
+        <input type="date" value="${(b.to||'').slice(0,10)}"
+          onchange="mdSetBlackoutField('${safe(p)}','${safe(s)}',${i},'to',this.value)"
+          style="width:115px;font-size:10px;">
+        <input type="text" value="${safe(b.label||'')}" placeholder="label"
+          onchange="mdSetBlackoutField('${safe(p)}','${safe(s)}',${i},'label',this.value)"
+          style="width:90px;font-size:10px;">
+        <button onclick="mdDeleteBlackout('${safe(p)}','${safe(s)}',${i})"
+          style="background:none;border:none;color:var(--red);cursor:pointer;font-weight:700;font-size:11px;line-height:1;">✕</button>
+      </div>`).join('');
+    return `${items}<button onclick="mdAddBlackout('${safe(p)}','${safe(s)}')"
+      style="font-size:10px;padding:2px 8px;cursor:pointer;background:var(--gold);color:var(--navy);border:none;border-radius:3px;font-weight:600;margin-top:2px;">+ Blackout</button>`;
+  };
+  const tiersList = (p, s, list) => {
+    const items = (list||[]).map((t,i) => `
+      <div style="display:flex;gap:4px;align-items:center;margin:2px 0;font-size:10px;">
+        <input type="number" min="1" step="1" value="${t.min_batches ?? ''}" placeholder="min"
+          onchange="mdSetTierField('${safe(p)}','${safe(s)}',${i},'min_batches', parseInt(this.value)||0)"
+          style="width:50px;text-align:right;font-size:10px;font-family:monospace;">
+        <span>+ batches →</span>
+        <input type="number" min="0" max="100" step="0.5" value="${t.pct ?? ''}" placeholder="%"
+          onchange="mdSetTierField('${safe(p)}','${safe(s)}',${i},'pct', parseFloat(this.value)||0)"
+          style="width:50px;text-align:right;font-size:10px;font-family:monospace;">
+        <span>% off</span>
+        <button onclick="mdDeleteTier('${safe(p)}','${safe(s)}',${i})"
+          style="background:none;border:none;color:var(--red);cursor:pointer;font-weight:700;font-size:11px;line-height:1;">✕</button>
+      </div>`).join('');
+    return `${items}<button onclick="mdAddTier('${safe(p)}','${safe(s)}')"
+      style="font-size:10px;padding:2px 8px;cursor:pointer;background:var(--gold);color:var(--navy);border:none;border-radius:3px;font-weight:600;margin-top:2px;">+ Tier</button>`;
+  };
+  const rows = [];
+  for (const product of products) {
+    for (const r of (SUPPLIER_REGISTRY[product] || [])) {
+      const ov = (supplierOverrides[product]||{})[r.supplier];
+      const eff = ov ? Object.assign({}, r, ov) : r;
+      rows.push(`<tr>
+        <td>${product}</td>
+        <td style="font-weight:600;">${r.supplier}</td>
+        <td>${dateCell(product, r.supplier, 'commercialization_date', eff.commercialization_date || eff.active_from)}</td>
+        <td style="text-align:right;">${numCell(product, r.supplier, 'moq_per_year', eff.moq_per_year, 50)}</td>
+        <td style="text-align:right;">${numCell(product, r.supplier, 'cap_per_month', eff.cap_per_month, 50)}</td>
+        <td style="text-align:right;">${numCell(product, r.supplier, 'cap_per_year', eff.cap_per_year, 50)}</td>
+        <td style="min-width:330px;">${blackoutsList(product, r.supplier, eff.blackouts)}</td>
+        <td style="min-width:260px;">${tiersList(product, r.supplier, eff.tier_discounts)}</td>
+      </tr>`);
+    }
+  }
   host.innerHTML = `
-    <p class="md-hint">Per-product metadata — edit any cell inline. Drives MRP fallback when the supplier registry doesn't cover a product/month, and feeds chart tooltips. <b>Reset section</b> rolls every value back to the baseline snapshot captured when you opened this modal.</p>
+    <p class="md-hint">Supplier contractual constraints. <b>Commercialization date</b> sets when annual MOQ kicks in (defaults to "Active from"). <b>MOQ/yr</b> overrides MOH downward — model must schedule at least this many batches per calendar year. <b>Cap/mo</b> and <b>Cap/yr</b> are physical capacity ceilings (soft — flagged in red when exceeded, scheduler still runs). <b>Blackouts</b> are date ranges when this supplier can't manufacture (e.g. Italy in August). <b>Tier discounts</b> stack additively in calendar-year batch counts — to switch to multiplicative, edit <code>_supplierDiscountPct</code> in code.</p>
+    <div style="overflow:auto;max-height:62vh;">
     <table>
-      <thead><tr><th>Product</th><th>Category</th><th>Unit</th><th>Target MOH</th><th>Critical MOH</th><th>Overstock</th><th>Batch size</th><th>Lead time</th><th>Supplier</th></tr></thead>
-      <tbody>${products.map(p=>{ const r = RAW[p]||{}; return `<tr>
-        <td><b>${p}</b></td>
-        <td><input type="text"   value="${safe(r.category||'')}"   onchange="mdSetRaw('${safe(p)}','category',this.value)" style="width:100px;"></td>
-        <td><input type="text"   value="${safe(r.unit||'')}"        onchange="mdSetRaw('${safe(p)}','unit',this.value)" style="width:55px;"></td>
-        <td><input type="number" step="any" min="0" value="${r.target_moh   ?? ''}" onchange="mdSetRaw('${safe(p)}','target_moh',   parseFloat(this.value)||0)" style="width:54px;text-align:right;"></td>
-        <td><input type="number" step="any" min="0" value="${r.critical_moh ?? ''}" onchange="mdSetRaw('${safe(p)}','critical_moh', parseFloat(this.value)||0)" style="width:54px;text-align:right;"></td>
-        <td><input type="number" step="any" min="0" value="${r.overstock_moh?? ''}" onchange="mdSetRaw('${safe(p)}','overstock_moh',parseFloat(this.value)||0)" style="width:54px;text-align:right;"></td>
-        <td><input type="number" step="any" min="0" value="${r.batch_size   ?? ''}" onchange="mdSetRaw('${safe(p)}','batch_size',   parseFloat(this.value)||0)" style="width:80px;text-align:right;font-family:monospace;"></td>
-        <td><input type="number" step="any" min="0" value="${r.lead_time    ?? ''}" onchange="mdSetRaw('${safe(p)}','lead_time',    parseFloat(this.value)||0)" style="width:54px;text-align:right;"></td>
-        <td><input type="text"   value="${safe(r.supplier||'')}"    onchange="mdSetRaw('${safe(p)}','supplier',this.value)" style="width:170px;"></td>
-      </tr>`; }).join('')}</tbody>
-    </table>`;
+      <thead>
+        <tr>
+          <th>Product</th><th>Supplier</th>
+          <th>Commercialization</th>
+          <th title="Min batches per calendar year (override MOH downward)">MOQ/yr</th>
+          <th title="Max batches per month (soft cap — flagged red)">Cap/mo</th>
+          <th title="Max batches per year (soft cap — flagged red)">Cap/yr</th>
+          <th>Blackout periods</th>
+          <th>Cost tier discounts</th>
+        </tr>
+      </thead>
+      <tbody>${rows.join('')}</tbody>
+    </table>
+    </div>`;
+}
+
+// ── Blackout / tier sub-helpers ───────────────────────────────────────────
+function _supplierGetRaw(product, supplier) {
+  // Returns the raw SUPPLIER_REGISTRY row (so edits target the canonical
+  // array). Falls back to a synthesized object if the row is missing.
+  const list = (SUPPLIER_REGISTRY[product] || []);
+  return list.find(r => r.supplier === supplier);
+}
+function mdAddBlackout(product, supplier) {
+  const r = _supplierGetRaw(product, supplier); if (!r) return;
+  if (!Array.isArray(r.blackouts)) r.blackouts = [];
+  r.blackouts.push({ from: null, to: null, label: '' });
+  // Also write through supplierOverrides so it persists across resets the same
+  // way as everything else in this tab.
+  setSupplierOverride(product, supplier, { blackouts: r.blackouts });
+  mdRenderRaw(document.getElementById('md-body'));
+  _mdUpdateStatus();
+}
+function mdSetBlackoutField(product, supplier, idx, field, value) {
+  const r = _supplierGetRaw(product, supplier); if (!r) return;
+  if (!Array.isArray(r.blackouts)) r.blackouts = [];
+  if (!r.blackouts[idx]) return;
+  r.blackouts[idx][field] = value || null;
+  setSupplierOverride(product, supplier, { blackouts: r.blackouts });
+  if (typeof runScenario === 'function') runScenario();
+  _mdUpdateStatus();
+}
+function mdDeleteBlackout(product, supplier, idx) {
+  const r = _supplierGetRaw(product, supplier); if (!r) return;
+  if (!Array.isArray(r.blackouts)) return;
+  r.blackouts.splice(idx, 1);
+  setSupplierOverride(product, supplier, { blackouts: r.blackouts });
+  mdRenderRaw(document.getElementById('md-body'));
+  if (typeof runScenario === 'function') runScenario();
+  _mdUpdateStatus();
+}
+function mdAddTier(product, supplier) {
+  const r = _supplierGetRaw(product, supplier); if (!r) return;
+  if (!Array.isArray(r.tier_discounts)) r.tier_discounts = [];
+  r.tier_discounts.push({ min_batches: 1, pct: 0 });
+  setSupplierOverride(product, supplier, { tier_discounts: r.tier_discounts });
+  mdRenderRaw(document.getElementById('md-body'));
+  _mdUpdateStatus();
+}
+function mdSetTierField(product, supplier, idx, field, value) {
+  const r = _supplierGetRaw(product, supplier); if (!r) return;
+  if (!Array.isArray(r.tier_discounts)) r.tier_discounts = [];
+  if (!r.tier_discounts[idx]) return;
+  r.tier_discounts[idx][field] = value;
+  setSupplierOverride(product, supplier, { tier_discounts: r.tier_discounts });
+  if (typeof runScenario === 'function') runScenario();
+  _mdUpdateStatus();
+}
+function mdDeleteTier(product, supplier, idx) {
+  const r = _supplierGetRaw(product, supplier); if (!r) return;
+  if (!Array.isArray(r.tier_discounts)) return;
+  r.tier_discounts.splice(idx, 1);
+  setSupplierOverride(product, supplier, { tier_discounts: r.tier_discounts });
+  mdRenderRaw(document.getElementById('md-body'));
+  if (typeof runScenario === 'function') runScenario();
+  _mdUpdateStatus();
 }
 
 function mdSetRaw(product, field, value) {
@@ -7818,7 +7990,7 @@ function runCombinedPoolTab() {
       <button class="md-tab" data-mdtab="lots"      onclick="mdSwitchTab('lots')">🧪 Lots</button>
       <button class="md-tab" data-mdtab="prod"      onclick="mdSwitchTab('prod')">📦 Production</button>
       <button class="md-tab" data-mdtab="demand"    onclick="mdSwitchTab('demand')">📈 Demand Streams</button>
-      <button class="md-tab" data-mdtab="raw"       onclick="mdSwitchTab('raw')">⚙️ Product Meta</button>
+      <button class="md-tab" data-mdtab="raw"       onclick="mdSwitchTab('raw')">📜 Supplier Contracts</button>
       <button class="md-tab" data-mdtab="costs"     onclick="mdSwitchTab('costs')">💰 Costs</button>
     </div>
     <!-- Toolbar -->
