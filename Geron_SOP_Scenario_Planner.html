@@ -822,8 +822,41 @@ Based on scenario MOH vs target and critical thresholds">Risk</th>
             <div class="card-title">Production Schedule Override <span id="prod-override-badge" style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:#FFA300;color:#003B5C;margin-left:8px;display:none;">OVERRIDES ACTIVE</span></div>
             <div class="card-subtitle" style="margin-top:2px;">Edit scenario batches month-by-month. ⚠ Amber = binding period. Changes flow through all tabs instantly.</div>
           </div>
-          <button class="btn btn-sm" style="background:#e74c3c;color:white;font-size:11px;" onclick="clearProdOverrides()">✕ Clear Overrides</button>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <button onclick="toggleProdAddForm()" style="font-size:11px;padding:5px 12px;cursor:pointer;background:var(--gold);color:var(--navy);border:none;border-radius:4px;font-weight:700;">+ Add batch</button>
+            <button class="btn btn-sm" style="background:#e74c3c;color:white;font-size:11px;" onclick="clearProdOverrides()">✕ Clear Overrides</button>
+          </div>
         </div>
+
+        <!-- Inline + Add batch form, toggled by button above. Pick a month +
+             batch count; the supplier auto-resolves from the registry's active
+             window for that month. -->
+        <div id="prod-add-form" style="display:none;margin:0 10px 10px;padding:10px 12px;border:1px dashed var(--gold);border-radius:4px;background:rgba(218,165,32,0.05);">
+          <div style="display:grid;grid-template-columns:repeat(4,1fr) auto;gap:8px;align-items:end;">
+            <label style="font-size:11px;color:var(--muted);">Month<br>
+              <input id="prod-add-month" type="month" style="width:100%;font-size:11px;padding:3px;"
+                onchange="_refreshProdAddSupplier()">
+            </label>
+            <label style="font-size:11px;color:var(--muted);" title="Supplier auto-derived from getActiveSupplier for the month picked. Edit on the Suppliers Master Data tab if wrong.">Supplier<br>
+              <input id="prod-add-supplier" type="text" readonly placeholder="(pick a month)"
+                style="width:100%;font-size:11px;padding:3px;background:rgba(0,0,0,0.04);">
+            </label>
+            <label style="font-size:11px;color:var(--muted);" title="Batch size for this supplier — locked, read from the registry.">Batch size<br>
+              <input id="prod-add-batchsize" type="text" readonly placeholder="—"
+                style="width:100%;font-size:11px;padding:3px;background:rgba(0,0,0,0.04);text-align:right;">
+            </label>
+            <label style="font-size:11px;color:var(--muted);">Batches<br>
+              <input id="prod-add-batches" type="number" min="1" step="1" value="1"
+                style="width:100%;font-size:11px;padding:3px;text-align:right;">
+            </label>
+            <button onclick="addBatchFromProdForm()"
+              style="font-size:11px;padding:6px 14px;cursor:pointer;background:var(--navy);color:#fff;border:none;border-radius:3px;font-weight:600;">Add</button>
+          </div>
+          <div id="prod-add-hint" style="margin-top:6px;font-size:10px;color:var(--muted);font-style:italic;">
+            Adds <code>setProdOverride(product, month, baseBatches + entered)</code>. If a row already has a scenario value, the form stacks on top of it (so two clicks of "+ Add batch" with 1 batch each adds 2 to that month).
+          </div>
+        </div>
+
         <div class="table-wrap" style="max-height:300px;overflow-y:auto;">
           <table id="tbl-prod-override" style="font-size:12px;">
             <thead>
@@ -2084,6 +2117,66 @@ function setProdOverride(product, month, batches) {
   prodOverrides[product][month] = batches;
   updateOverrideBadge();
   runScenario();
+}
+
+// ── "+ Add batch" inline form on the Production Schedule Override card ───────
+// Mirrors the Expiry Risk "+ Add lot" affordance: lets the user schedule a new
+// batch in any month (including months currently absent from the override
+// view) without having to scroll the table. Resolved supplier + batch size
+// are surfaced for visual confirmation so the user knows what they'll get.
+function toggleProdAddForm() {
+  const el = document.getElementById('prod-add-form');
+  if (!el) return;
+  const opening = el.style.display === 'none' || !el.style.display;
+  el.style.display = opening ? 'block' : 'none';
+  if (opening) {
+    // Default to current month if blank, then resolve supplier.
+    const m = document.getElementById('prod-add-month');
+    if (m && !m.value) m.value = new Date().toISOString().slice(0, 7);
+    _refreshProdAddSupplier();
+  }
+}
+function _refreshProdAddSupplier() {
+  const product = document.getElementById('sel-product')?.value;
+  const monthInput = document.getElementById('prod-add-month')?.value;
+  const supEl = document.getElementById('prod-add-supplier');
+  const bsEl  = document.getElementById('prod-add-batchsize');
+  if (!product || !monthInput || !supEl || !bsEl) return;
+  const monthIso = monthInput + '-01';
+  const sup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(product, monthIso) : null;
+  if (sup) {
+    supEl.value = sup.supplier || '';
+    bsEl.value  = sup.batch_size != null ? Number(sup.batch_size).toLocaleString() : '';
+  } else {
+    const meta = (typeof getMeta === 'function') ? getMeta(product) : {};
+    supEl.value = meta.supplier || '(none active)';
+    bsEl.value  = meta.batch_size != null ? Number(meta.batch_size).toLocaleString() : '';
+  }
+}
+function addBatchFromProdForm() {
+  const product    = document.getElementById('sel-product')?.value;
+  const monthInput = document.getElementById('prod-add-month')?.value;
+  const batches    = parseInt(document.getElementById('prod-add-batches')?.value, 10);
+  if (!product) { alert('Pick a spotlight product first.'); return; }
+  if (!monthInput) { alert('Pick a month.'); return; }
+  if (!batches || batches < 1) { alert('Enter a batch count (1 or more).'); return; }
+  const month = monthInput + '-01';
+  // Stack on top of whatever's already there (base or override).
+  const meta = getMeta(product);
+  const bs   = (parseFloat(document.getElementById('param-batch-size')?.value) > 0
+                ? parseFloat(document.getElementById('param-batch-size')?.value)
+                : meta.batch_size) || 1;
+  const baseRow = (typeof PROD_DATA !== 'undefined')
+    ? PROD_DATA.find(r => r.product === product && r.month === month) : null;
+  const baseBatches = baseRow ? Math.round((baseRow.prod || 0) / bs) : 0;
+  const existingOv  = (prodOverrides[product] || {})[month];
+  const current     = existingOv !== undefined ? existingOv : baseBatches;
+  setProdOverride(product, month, current + batches);
+  // Reset the form for the next add but keep it open.
+  document.getElementById('prod-add-batches').value = 1;
+  if (typeof toast === 'function') {
+    toast(`+${batches} batch${batches === 1 ? '' : 'es'} scheduled for ${monthLabel(month)} (${product})`);
+  }
 }
 
 function clearProdOverrides() {
