@@ -1897,7 +1897,11 @@ function applyDerivedDemand(childBaseRows, derivedDemandByMonth) {
 }
 
 function getBaseRows(product) {
-  const rows = _buildRows(product, _carvedOutStreams(DEMAND_BY_STREAM) || {});
+  // Base = workbook master data, unmodified by Supply Mode. The strength
+  // switch is a scenario-side construct, so we feed DEMAND_BY_STREAM raw
+  // (no _switchedStreams call) and the Inventory / Demand / Expiry tabs
+  // can show the original-vs-scenario delta cleanly.
+  const rows = _buildRows(product, DEMAND_BY_STREAM || {});
   // For DP products: offset demand by lead time (LP prod at month+lt drives DP demand at month)
   if (product === '200mg DP') return applyDPLeadTimeOffset(rows, '188mg LP');
   if (product === '50mg DP')  return applyDPLeadTimeOffset(rows, '47mg LP');
@@ -6088,8 +6092,11 @@ function renderRunwayTab() {
     // Scenario: same sales factor (already applied via getBaseRows region filter)
     const sf = (parseInt(document.getElementById('sales-factor')?.value) || 100) / 100;
     const baseR = getBaseRows(prod);
-    const usMap = getRegionDemandByMonth(prod, 'US');
-    const euMap = getRegionDemandByMonth(prod, 'EU');
+    // Use the same stream source baseR was built from so the US/EU breakdown
+    // adds up to the total. getBaseRows feeds raw DEMAND_BY_STREAM (no Supply
+    // Mode switch) — pass it explicitly here so the per-region maps match.
+    const usMap = getRegionDemandByMonth(prod, 'US', DEMAND_BY_STREAM);
+    const euMap = getRegionDemandByMonth(prod, 'EU', DEMAND_BY_STREAM);
     let cum = 0;
     return baseR.map(r => {
       const usD  = (usMap[r.month] || 0) * sf;
