@@ -496,20 +496,6 @@
                title="Region AND indication must both be checked for a stream to contribute demand.">Indication Filter</label>
         <div id="indication-toggles-container" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px;"></div>
 
-        <label style="margin-top:10px;display:block;font-weight:600;"
-               title="Force EU demand to 47mg-only between the two dates (US is unaffected). EU 188mg demand converts to 47mg at a 4:1 ratio per dose; outside the window, both strengths resume normally.">EU 47mg-only window</label>
-        <div class="row2" style="margin-top:4px;">
-          <div>
-            <label style="font-size:10px;color:var(--muted);">From</label>
-            <input type="date" id="eu-carve-from" value="" oninput="runScenario(); runCombinedPoolTab && runCombinedPoolTab();">
-          </div>
-          <div>
-            <label style="font-size:10px;color:var(--muted);">Cutover back</label>
-            <input type="date" id="eu-carve-to"   value="" oninput="runScenario(); runCombinedPoolTab && runCombinedPoolTab();">
-          </div>
-        </div>
-        <div id="eu-carve-status" style="font-size:10px;color:var(--muted);margin-top:2px;">Both blank = carve-out off.</div>
-
         <label style="margin-top:8px;">Upload Custom Demand Template</label>
         <button onclick="downloadDemandTemplate()" style="width:100%;margin-bottom:6px;padding:7px;background:#005EB8;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;">📥 Download CSV Template</button>
         <div class="upload-area" onclick="document.getElementById('demand-upload').click()">
@@ -537,6 +523,31 @@
 
         <div id="mode-desc" style="margin-top:6px;" class="info-box">
           Standard: both strengths fulfilled from respective products.
+        </div>
+
+        <!-- Filters shown only when a non-Normal mode is selected. Folds in
+             the legacy "EU 47mg window" — pick any regions (default: all
+             known) and bound the carve-out with optional from/to dates. -->
+        <div id="supply-mode-filters" style="display:none; margin-top:8px;">
+          <div class="supply-indent">
+            <label style="font-weight:600;"
+              title="Limit the strength switch to a subset of regions. Stream keys are matched by their leading region code (US, EU, JP, …). When all regions are checked, the switch behaves globally — same as the legacy Supply Mode.">Apply to regions</label>
+            <div id="supply-mode-regions" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px;font-size:12px;"></div>
+
+            <label style="margin-top:8px;display:block;font-weight:600;"
+              title="Optional time bounds. Outside the [From, To] window the streams pass through unchanged. Leave both blank to apply the switch across the whole horizon.">Apply during</label>
+            <div class="row2" style="margin-top:4px;">
+              <div>
+                <label style="font-size:10px;color:var(--muted);">From</label>
+                <input type="date" id="supply-mode-from" value="" oninput="runScenario(); runCombinedPoolTab && runCombinedPoolTab();">
+              </div>
+              <div>
+                <label style="font-size:10px;color:var(--muted);">To</label>
+                <input type="date" id="supply-mode-to"   value="" oninput="runScenario(); runCombinedPoolTab && runCombinedPoolTab();">
+              </div>
+            </div>
+            <div id="supply-mode-status" style="font-size:10px;color:var(--muted);margin-top:2px;">Both blank = always-on window.</div>
+          </div>
         </div>
 
         <div id="conversion-opts" style="display:none; margin-top:8px;">
@@ -1398,6 +1409,9 @@ function renderRegionToggles() {
     </label>`;
   }).join('');
   renderIndicationToggles();
+  // Keep the Supply Mode region chips in sync — new regions from a CSV upload
+  // should appear there too.
+  if (typeof renderSupplyModeRegions === 'function') renderSupplyModeRegions();
 }
 
 function getKnownIndications() {
@@ -1465,53 +1479,90 @@ function getRegionDemandByMonth(product, region, streamSource, activeIndications
   return byMonth;
 }
 
-// EU 47mg-only carve-out: during the user-chosen window, every EU LP stream
-// at the 188mg strength flips its demand to 0 and that demand (× the EU-to-47
-// conversion ratio, default 4) is moved onto its 47mg sister stream. Outside
-// the window the streams pass through untouched. Returns a deep-copied object
-// when a window is active so callers can mutate without corrupting the base.
-function _euCarveWindow() {
-  const f = (document.getElementById('eu-carve-from')||{}).value;
-  const t = (document.getElementById('eu-carve-to')||{}).value;
-  if (!f && !t) return null;
+// Stream-level strength switch driven by the Supply Mode panel.
+//   supplyMode   = 'normal'  → pass through unchanged
+//   supplyMode   = '47only'  → 188mg → 47mg × conv-ratio (default 4)
+//   supplyMode   = '188only' → 47mg → 188mg at 1:1
+// The switch is gated by:
+//   regions = subset of the known region prefixes in the stream keys
+//             (default: all known regions, i.e. globally on)
+//   window  = optional [from, to] ISO dates — when both are blank the switch
+//             runs across the whole horizon.
+// Stream keys follow the pattern "{REGION} {INDICATION} ({PRODUCT})", so
+// region matching is done off the leading 2–3 letter region code.
+function _supplyModeWindow() {
+  const f = (document.getElementById('supply-mode-from')||{}).value;
+  const t = (document.getElementById('supply-mode-to')||{}).value;
   return { from: f || null, to: t || null };
 }
-function _inEuCarveWindow(monthIso, w) {
-  if (!w) return false;
+function _inSupplyModeWindow(monthIso, w) {
+  if (!w) return true;
+  if (!w.from && !w.to) return true;
   const m = (monthIso||'').slice(0,10);
   return (!w.from || m >= w.from) && (!w.to || m <= w.to);
 }
-function _carvedOutStreams(src) {
-  const w = _euCarveWindow();
-  const status = document.getElementById('eu-carve-status');
-  if (!w || !src) {
-    if (status) status.textContent = 'Both blank = carve-out off.';
+function _supplyModeRegions() {
+  const box = document.getElementById('supply-mode-regions');
+  if (!box) return null;  // null = treat as all-on (pre-DOM)
+  const boxes = box.querySelectorAll('input[type=checkbox]');
+  if (!boxes.length) return null;
+  const on = [];
+  boxes.forEach(cb => { if (cb.checked) on.push(cb.dataset.region); });
+  return on;
+}
+function _streamRegion(key) {
+  const m = (key||'').match(/^([A-Z]{2,3})(?:\s|$)/);
+  return m ? m[1] : null;
+}
+function _switchedStreams(src) {
+  const status = document.getElementById('supply-mode-status');
+  if (!src || (typeof supplyMode === 'undefined') || supplyMode === 'normal') {
+    if (status) status.textContent = 'Both blank = always-on window.';
     return src;
   }
-  if (status) status.textContent = `Active ${w.from||'…'} → ${w.to||'…'} — EU 188mg demand routed onto 47mg`;
-  // Ratio defaults to 4 (matches the existing 188→47 conv-ratio input when present).
-  const ratio = parseFloat((document.getElementById('conv-ratio')||{}).value) || 4;
-  const isEu188 = k => /^EU\b.*\(188mg LP\)\s*$/.test(k);
-  const sister  = k => k.replace('(188mg LP)','(47mg LP)');
+  const w        = _supplyModeWindow();
+  const regions  = _supplyModeRegions();
+  const ratio    = parseFloat((document.getElementById('conv-ratio')||{}).value) || 4;
+  // Direction: 188→47 for 47only, 47→188 for 188only.
+  const dir      = supplyMode === '47only' ? '188to47' : '47to188';
+  const srcLabel = dir === '188to47' ? '(188mg LP)' : '(47mg LP)';
+  const dstLabel = dir === '188to47' ? '(47mg LP)'  : '(188mg LP)';
+  const mult     = dir === '188to47' ? ratio        : 1;
+
+  // Deep-copy so mutations don't corrupt the underlying data
   const out = {};
   for (const k of Object.keys(src)) out[k] = (src[k]||[]).map(r => Object.assign({}, r));
+
+  let touched = 0;
   for (const k of Object.keys(out)) {
-    if (!isEu188(k)) continue;
-    const sk = sister(k);
+    if (!k.endsWith(srcLabel)) continue;
+    const reg = _streamRegion(k);
+    if (regions && regions.length && !regions.includes(reg)) continue;
+    const sk = k.replace(srcLabel, dstLabel);
     if (!out[sk]) out[sk] = [];
     const sByMonth = {};
     for (const e of out[sk]) sByMonth[e.m] = e;
     for (const e of out[k]) {
-      if (!_inEuCarveWindow(e.m, w)) continue;
-      const converted = (e.d || 0) * ratio;
+      if (!_inSupplyModeWindow(e.m, w)) continue;
+      const converted = (e.d || 0) * mult;
       e.d = 0;
       if (sByMonth[e.m]) sByMonth[e.m].d += converted;
       else { const ne = { m: e.m, d: converted }; out[sk].push(ne); sByMonth[e.m] = ne; }
+      touched++;
     }
     out[sk].sort((a,b) => (a.m||'').localeCompare(b.m||''));
   }
+  if (status) {
+    const dirLabel  = dir === '188to47' ? '188mg → 47mg × ' + ratio : '47mg → 188mg 1:1';
+    const regLabel  = (regions && regions.length) ? regions.join(',') : 'all regions';
+    const winLabel  = (w.from || w.to) ? `${w.from || '…'} → ${w.to || '…'}` : 'all months';
+    status.textContent = `${dirLabel} · ${regLabel} · ${winLabel} (${touched} stream-month${touched === 1 ? '' : 's'} switched)`;
+  }
   return out;
 }
+
+// Back-compat alias — kept so any external/legacy callers continue to work.
+function _carvedOutStreams(src) { return _switchedStreams(src); }
 
 // Build a merged stream view: baseline overridden/extended by customStreams
 function getMergedStreams() {
@@ -2499,51 +2550,13 @@ function runMRP(baseRows, salesFactor, meta, horizonMonths, product) {
 // ══════════════════════════════════════════════════════════════════════════════
 //  APPLY SUPPLY MODE CONVERSION
 // ══════════════════════════════════════════════════════════════════════════════
+// Strength switching now lives at the stream level in _switchedStreams() — by
+// the time rows reach this function, getBaseRows/getScenarioRows have already
+// folded the 188↔47 conversion into the per-product demand for whatever
+// regions and window the user picked. This function just applies the sales
+// factor uniformly so every downstream consumer sees the scaled demand.
 function applySupplyMode(product, rows, salesFactor) {
-  const sf    = salesFactor / 100;
-  const ratio = parseFloat(document.getElementById('conv-ratio')?.value) || 4;
-
-  if (supplyMode === 'normal') {
-    return rows.map(r => ({ ...r, demand: r.demand * sf }));
-  }
-
-  if (supplyMode === '188only') {
-    if (product === '188mg LP') {
-      // Build month->demand lookup for 47mg LP
-      const rows47 = getBaseRows('47mg LP');
-      const map47  = {};
-      rows47.forEach(r => { map47[r.month] = r.demand; });
-      // 188mg absorbs all 47mg demand 1:1 on top of its own demand
-      return rows.map(r => ({
-        ...r,
-        demand: (r.demand + (map47[r.month] || 0)) * sf
-      }));
-    }
-    if (product === '47mg LP') {
-      // 47mg is fully replaced by 188mg — zero demand
-      return rows.map(r => ({ ...r, demand: 0 }));
-    }
-  }
-
-  if (supplyMode === '47only') {
-    if (product === '47mg LP') {
-      // Build month->demand lookup for 188mg LP
-      const rows188 = getBaseRows('188mg LP');
-      const map188  = {};
-      rows188.forEach(r => { map188[r.month] = r.demand; });
-      // 47mg absorbs 188mg demand × ratio on top of its own demand
-      return rows.map(r => ({
-        ...r,
-        demand: (r.demand + (map188[r.month] || 0) * ratio) * sf
-      }));
-    }
-    if (product === '188mg LP') {
-      // 188mg is fully replaced by 47mg — zero demand
-      return rows.map(r => ({ ...r, demand: 0 }));
-    }
-  }
-
-  // All other products (DP, DS, raw materials) — unaffected by LP supply mode
+  const sf = salesFactor / 100;
   return rows.map(r => ({ ...r, demand: r.demand * sf }));
 }
 
@@ -4307,10 +4320,17 @@ function updateExpiryTab(product, baseRows, scenRows) {
     return d.toISOString().slice(0, 10);
   }
 
-  // inactiveProduct: this product has no demand because supply mode excludes it
-  const inactiveProduct =
+  // inactiveProduct: the supply-mode switch routes every relevant region's
+  // demand away from this product, leaving zero demand. Only flag this when
+  // the switch covers ALL known regions — under a partial region selection
+  // the other regions still drive demand here.
+  const _smRegs  = (typeof _supplyModeRegions  === 'function') ? _supplyModeRegions()  : null;
+  const _knownR  = (typeof getKnownRegions      === 'function') ? getKnownRegions()     : [];
+  const _allRegs = !_smRegs || _smRegs.length === _knownR.length;
+  const inactiveProduct = _allRegs && (
     (supplyMode === '188only' && product === '47mg LP') ||
-    (supplyMode === '47only'  && product === '188mg LP');
+    (supplyMode === '47only'  && product === '188mg LP')
+  );
 
   // Average monthly demand across the lot's consumption window
   function avgDemandForLot(prod, consumeStart, runout) {
@@ -5070,12 +5090,39 @@ function setSupplyMode(mode) {
   if (activeBtn) activeBtn.classList.add('active');
   const desc = {
     normal:  'Standard: both strengths fulfilled from respective products.',
-    '188only': '188mg Only: all LP demand (47mg + 188mg) fulfilled as 188mg (1:1 unit conversion).',
-    '47only':  '47mg Only: 188mg demand converted to 47mg via editable ratio, combined with 47mg demand.',
+    '188only': '188mg Only: 47mg demand routed to 188mg 1:1 — limit by region/window below.',
+    '47only':  '47mg Only: 188mg demand converted to 47mg via editable ratio — limit by region/window below.',
   };
-  document.getElementById('mode-desc').textContent = desc[mode] || '';
-  document.getElementById('conversion-opts').style.display = mode === '47only' ? 'block' : 'none';
+  const descEl = document.getElementById('mode-desc');
+  if (descEl) descEl.textContent = desc[mode] || '';
+  const ratioBlock   = document.getElementById('conversion-opts');
+  const filterBlock  = document.getElementById('supply-mode-filters');
+  if (ratioBlock)  ratioBlock.style.display  = mode === '47only' ? 'block' : 'none';
+  if (filterBlock) filterBlock.style.display = mode === 'normal' ? 'none'  : 'block';
+  if (mode !== 'normal') renderSupplyModeRegions();
   runScenario();
+}
+
+// Region chips for the Supply Mode panel — mirrors the top-level Region Filter
+// but lives next to the strength-switch controls and binds to _supplyModeRegions.
+// Default state: every known region checked = global switch (matches the
+// pre-region behaviour of the old Supply Mode toggle).
+function renderSupplyModeRegions() {
+  const box = document.getElementById('supply-mode-regions');
+  if (!box) return;
+  const regions = (typeof getKnownRegions === 'function') ? getKnownRegions() : [];
+  // Preserve current checked state so re-renders (e.g. after a CSV upload that
+  // adds a new region) don't clobber the user's selection.
+  const prev = {};
+  box.querySelectorAll('input[type=checkbox]').forEach(cb => { prev[cb.dataset.region] = cb.checked; });
+  box.innerHTML = regions.map(r => {
+    const flag = (typeof REGION_FLAGS === 'object' && REGION_FLAGS[r]) ? REGION_FLAGS[r] : '🌍';
+    const checked = (r in prev) ? prev[r] : true;
+    return `<label style="display:flex;align-items:center;gap:5px;cursor:pointer;">
+      <input type="checkbox" data-region="${r}" ${checked ? 'checked' : ''}
+        onchange="runScenario(); runCombinedPoolTab && runCombinedPoolTab();"> ${flag} ${r}
+    </label>`;
+  }).join('') || '<span style="color:var(--muted);font-style:italic;">(no regions detected)</span>';
 }
 
 function setBudgetPeriod(period) {
@@ -5219,6 +5266,9 @@ function getCurrentScenarioState() {
     salesFactor:  parseInt(document.getElementById('sales-factor')?.value),
     supplyMode,
     convRatio:    parseFloat(document.getElementById('conv-ratio').value),
+    supplyModeRegions: _supplyModeRegions(),
+    supplyModeFrom:    (document.getElementById('supply-mode-from')||{}).value || '',
+    supplyModeTo:      (document.getElementById('supply-mode-to')||{}).value   || '',
     targetMOH:    parseFloat(document.getElementById('param-target-moh')?.value),
     criticalMOH:  parseFloat(document.getElementById('param-critical-moh')?.value),
     overstockMOH: parseFloat(document.getElementById('param-overstock-moh')?.value),
@@ -5237,8 +5287,20 @@ function applyScenarioState(s) {
   document.getElementById('param-critical-moh').value = s.criticalMOH || 6;
   document.getElementById('param-overstock-moh').value= s.overstockMOH|| 18;
   document.getElementById('param-lead-time').value    = s.leadTime    || 3;
-  
+  const fromEl = document.getElementById('supply-mode-from');
+  const toEl   = document.getElementById('supply-mode-to');
+  if (fromEl) fromEl.value = s.supplyModeFrom || '';
+  if (toEl)   toEl.value   = s.supplyModeTo   || '';
+
   setSupplyMode(s.supplyMode || 'normal');
+
+  // Restore region selection after setSupplyMode (which re-renders the chips).
+  if (Array.isArray(s.supplyModeRegions)) {
+    const wanted = new Set(s.supplyModeRegions);
+    document.querySelectorAll('#supply-mode-regions input[type=checkbox]').forEach(cb => {
+      cb.checked = wanted.has(cb.dataset.region);
+    });
+  }
 }
 
 function saveScenario() {
