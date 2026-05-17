@@ -601,12 +601,12 @@
         <div>
           <label style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
             <span>Batch Size (units/kg)</span>
-            <span id="param-batch-size-badge" style="display:none;font-size:9px;font-weight:700;background:#dc2626;color:#fff;border-radius:3px;padding:1px 5px;cursor:pointer;" title="This value is overriding every supplier's batch_size across all products and months. Click to clear."
-                  onclick="document.getElementById('param-batch-size').value=''; this.style.display='none'; runScenario();">OVERRIDING REGISTRY ✕</span>
+            <span style="font-size:9px;font-weight:700;background:rgba(0,59,92,0.08);color:var(--navy);border-radius:3px;padding:1px 5px;" title="Locked: read from the Suppliers Master Data registry for the supplier active TODAY. Edit there to change.">REGISTRY</span>
           </label>
-          <input type="number" id="param-batch-size" value="" min="0" step="1" placeholder="From registry"
-            oninput="document.getElementById('param-batch-size-badge').style.display = (parseFloat(this.value)>0) ? 'inline-block' : 'none'; runScenario()">
-          <div style="font-size:9px;color:var(--muted);margin-top:2px;">Leave empty to use the active supplier's batch size per the registry timeline.</div>
+          <input type="text" id="param-batch-size" readonly placeholder="—"
+            title="Read-only — derived from getActiveSupplier(product, today). To change, edit Suppliers Master Data so the registry returns a different value for that month."
+            style="background:rgba(0,0,0,0.04);">
+          <div style="font-size:9px;color:var(--muted);margin-top:2px;">Active supplier today. Per-batch overrides (different supplier or size) live on the Production Schedule's <b>+ Add batch</b> form and override table.</div>
         </div>
         <div>
           <label style="display:flex;justify-content:space-between;align-items:center">
@@ -811,21 +811,24 @@ Based on scenario MOH vs target and critical thresholds">Risk</th>
         </div>
 
         <!-- Inline + Add batch form, toggled by button above. Pick a month +
-             batch count; the supplier auto-resolves from the registry's active
-             window for that month. -->
+             batch count; supplier defaults to the registry's active window
+             for that month, but is editable so a what-if can route the batch
+             through a different supplier. Batch size auto-fills from the
+             chosen supplier and is editable for one-off contract terms. -->
         <div id="prod-add-form" style="display:none;margin:0 10px 10px;padding:10px 12px;border:1px dashed var(--gold);border-radius:4px;background:rgba(218,165,32,0.05);">
           <div style="display:grid;grid-template-columns:repeat(4,1fr) auto;gap:8px;align-items:end;">
             <label style="font-size:11px;color:var(--muted);">Month<br>
               <input id="prod-add-month" type="month" style="width:100%;font-size:11px;padding:3px;"
                 onchange="_refreshProdAddSupplier()">
             </label>
-            <label style="font-size:11px;color:var(--muted);" title="Supplier auto-derived from getActiveSupplier for the month picked. Edit on the Suppliers Master Data tab if wrong.">Supplier<br>
-              <input id="prod-add-supplier" type="text" readonly placeholder="(pick a month)"
-                style="width:100%;font-size:11px;padding:3px;background:rgba(0,0,0,0.04);">
+            <label style="font-size:11px;color:var(--muted);" title="Defaults to getActiveSupplier for the month picked. Change to route this batch through a different supplier (creates a per-batch supplier override).">Supplier<br>
+              <select id="prod-add-supplier"
+                onchange="_onProdAddSupplierChange()"
+                style="width:100%;font-size:11px;padding:3px;"></select>
             </label>
-            <label style="font-size:11px;color:var(--muted);" title="Batch size for this supplier — locked, read from the registry.">Batch size<br>
-              <input id="prod-add-batchsize" type="text" readonly placeholder="—"
-                style="width:100%;font-size:11px;padding:3px;background:rgba(0,0,0,0.04);text-align:right;">
+            <label style="font-size:11px;color:var(--muted);" title="Batch size for the chosen supplier. Edit to schedule an off-pattern batch (creates a per-batch size override).">Batch size<br>
+              <input id="prod-add-batchsize" type="number" min="1" step="1" placeholder="—"
+                style="width:100%;font-size:11px;padding:3px;text-align:right;">
             </label>
             <label style="font-size:11px;color:var(--muted);">Batches<br>
               <input id="prod-add-batches" type="number" min="1" step="1" value="1"
@@ -835,7 +838,7 @@ Based on scenario MOH vs target and critical thresholds">Risk</th>
               style="font-size:11px;padding:6px 14px;cursor:pointer;background:var(--navy);color:#fff;border:none;border-radius:3px;font-weight:600;">Add</button>
           </div>
           <div id="prod-add-hint" style="margin-top:6px;font-size:10px;color:var(--muted);font-style:italic;">
-            Adds <code>setProdOverride(product, month, baseBatches + entered)</code>. If a row already has a scenario value, the form stacks on top of it (so two clicks of "+ Add batch" with 1 batch each adds 2 to that month).
+            Stacks on top of any existing base or override units in the target month. When Supplier or Batch size differ from the registry's defaults for that month, a rich override <code>{batches, supplier, batchSize}</code> is stored so downstream cap / cost flags use the right values.
           </div>
         </div>
 
@@ -843,7 +846,10 @@ Based on scenario MOH vs target and critical thresholds">Risk</th>
           <table id="tbl-prod-override" style="font-size:12px;">
             <thead>
               <tr>
-                <th>Month</th><th>Supplier</th><th>Status</th>
+                <th>Month</th>
+                <th title="Editable — registry default is selected unless an override picks a different supplier for this batch.">Supplier</th>
+                <th title="Editable — auto-fills from the selected supplier's registry value. Edit for an off-pattern batch.">Batch Size</th>
+                <th>Status</th>
                 <th style="text-align:right;">Base Batches</th>
                 <th style="text-align:right;">Base Units</th>
                 <th style="text-align:center;min-width:90px;">Scen Batches</th>
@@ -2204,24 +2210,103 @@ function getProdOverride(product, month) {
   return (prodOverrides[product] && prodOverrides[product][month] !== undefined)
     ? prodOverrides[product][month] : null;
 }
+
+// ── prodOverrides shape ──────────────────────────────────────────────────
+// Stored as either:
+//   prodOverrides[product][month] = N                        (legacy: batch count, registry supplier/BS)
+//   prodOverrides[product][month] = { batches, supplier, batchSize }
+//                                                            (rich: explicit supplier and/or batch size)
+// _normalizeProdOv() returns the rich form so callers can read uniformly.
+function _normalizeProdOv(v) {
+  if (v === undefined || v === null) return null;
+  if (typeof v === 'number') return { batches: v, supplier: null, batchSize: null };
+  return {
+    batches:   typeof v.batches === 'number' ? v.batches : 0,
+    supplier:  v.supplier  || null,
+    batchSize: (typeof v.batchSize === 'number' && v.batchSize > 0) ? v.batchSize : null,
+  };
+}
+function readProdOverride(product, month) {
+  return _normalizeProdOv(prodOverrides[product] && prodOverrides[product][month]);
+}
+function _supplierByName(product, name) {
+  if (!name) return null;
+  const rows = _srRowsFor(product) || [];
+  return rows.find(r => r.supplier === name) || null;
+}
+function _uniqueSupplierNames(product) {
+  const rows = _srRowsFor(product) || [];
+  const seen = new Set();
+  const out  = [];
+  for (const r of rows) {
+    if (r.supplier && !seen.has(r.supplier)) { seen.add(r.supplier); out.push(r.supplier); }
+  }
+  return out;
+}
+// Effective supplier + batch size for a (product, month), preferring an
+// explicit per-batch override on prodOverrides over the registry's
+// time-window pick. Used by capacity flags and the override table renderer.
+function getEffectiveSupplierForMonth(product, monthIso) {
+  const ov = readProdOverride(product, monthIso);
+  if (ov && ov.supplier) {
+    const sup = _supplierByName(product, ov.supplier);
+    if (sup) {
+      const eff = (typeof _effectiveSupplierRow === 'function') ? _effectiveSupplierRow(product, sup) : sup;
+      const bs  = ov.batchSize || eff.batch_size || 1;
+      return { supplier: eff, supplierName: eff.supplier, batchSize: bs, fromOverride: true };
+    }
+  }
+  const reg = (typeof getActiveSupplier === 'function') ? getActiveSupplier(product, monthIso) : null;
+  return {
+    supplier:     reg,
+    supplierName: reg ? reg.supplier : null,
+    batchSize:    (ov && ov.batchSize) || (reg && reg.batch_size) || 1,
+    fromOverride: !!(ov && ov.batchSize),
+  };
+}
 // Shared resolver: effective production qty for product/month, taking the
 // override layer into account. `committed` is the baseline (PROD_DATA) units.
-// `batchSize` converts an override (stored as batch count) back to units.
+// `batchSize` is the caller's registry-resolved fallback; an override's own
+// batchSize (or, if missing, the override-supplier's BS) wins.
 function getEffectiveProd(product, monthIso, batchSize, committed) {
-  const raw = prodOverrides[product] ? prodOverrides[product][monthIso] : undefined;
-  if (raw === undefined) return { units: committed || 0, fromOverride: false, cancelled: false };
-  const units = raw * (batchSize || 1);
-  return { units, fromOverride: true, cancelled: raw === 0 };
+  const ov = readProdOverride(product, monthIso);
+  if (!ov) return { units: committed || 0, fromOverride: false, cancelled: false, supplier: null, batchSize: null };
+  let bs = ov.batchSize;
+  if (!bs && ov.supplier) {
+    const sup = _supplierByName(product, ov.supplier);
+    if (sup) {
+      const eff = (typeof _effectiveSupplierRow === 'function') ? _effectiveSupplierRow(product, sup) : sup;
+      bs = eff && eff.batch_size;
+    }
+  }
+  if (!bs) bs = batchSize || 1;
+  return {
+    units:        ov.batches * bs,
+    fromOverride: true,
+    cancelled:    ov.batches === 0,
+    supplier:     ov.supplier || null,
+    batchSize:    bs,
+  };
 }
 // True iff this month's production was explicitly cancelled (override set to 0)
 // — distinct from "no production scheduled" (no override, baseline = 0).
 function isProdCancelled(product, monthIso) {
-  return prodOverrides[product] && prodOverrides[product][monthIso] === 0;
+  const ov = readProdOverride(product, monthIso);
+  return !!ov && ov.batches === 0;
 }
 
-function setProdOverride(product, month, batches) {
+function setProdOverride(product, month, batches, opts) {
   if (!prodOverrides[product]) prodOverrides[product] = {};
-  prodOverrides[product][month] = batches;
+  const supplier  = opts && opts.supplier  != null ? opts.supplier  : undefined;
+  const batchSize = opts && opts.batchSize != null && opts.batchSize > 0 ? opts.batchSize : undefined;
+  // Use the compact (numeric) form whenever the caller didn't pass explicit
+  // supplier/batchSize — keeps storage clean and back-compatible with the
+  // pre-existing scenario save format.
+  if (supplier === undefined && batchSize === undefined) {
+    prodOverrides[product][month] = batches;
+  } else {
+    prodOverrides[product][month] = { batches, supplier: supplier || null, batchSize: batchSize || null };
+  }
   updateOverrideBadge();
   runScenario();
 }
@@ -2243,46 +2328,85 @@ function toggleProdAddForm() {
     _refreshProdAddSupplier();
   }
 }
+// Populate the Supplier dropdown with every supplier registered for this
+// product. The registry-active supplier for the chosen month is selected by
+// default; switching to another option (or editing Batch size) routes the
+// add through the rich-override path.
 function _refreshProdAddSupplier() {
-  const product = document.getElementById('sel-product')?.value;
+  const product    = document.getElementById('sel-product')?.value;
   const monthInput = document.getElementById('prod-add-month')?.value;
-  const supEl = document.getElementById('prod-add-supplier');
-  const bsEl  = document.getElementById('prod-add-batchsize');
-  if (!product || !monthInput || !supEl || !bsEl) return;
-  const monthIso = monthInput + '-01';
-  const sup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(product, monthIso) : null;
-  if (sup) {
-    supEl.value = sup.supplier || '';
-    bsEl.value  = sup.batch_size != null ? Number(sup.batch_size).toLocaleString() : '';
-  } else {
-    const meta = (typeof getMeta === 'function') ? getMeta(product) : {};
-    supEl.value = meta.supplier || '(none active)';
-    bsEl.value  = meta.batch_size != null ? Number(meta.batch_size).toLocaleString() : '';
-  }
+  const supEl      = document.getElementById('prod-add-supplier');
+  const bsEl       = document.getElementById('prod-add-batchsize');
+  if (!product || !supEl || !bsEl) return;
+  const monthIso = monthInput ? (monthInput + '-01') : new Date().toISOString().slice(0,10);
+  const names    = _uniqueSupplierNames(product);
+  const reg      = (typeof getActiveSupplier === 'function') ? getActiveSupplier(product, monthIso) : null;
+  const defName  = reg ? reg.supplier : (names[0] || '');
+  supEl.innerHTML = names.length
+    ? names.map(n => `<option value="${n}" ${n===defName?'selected':''}>${n}${n===defName?' (registry)':''}</option>`).join('')
+    : `<option value="">(no suppliers registered)</option>`;
+  // Auto-fill batch size from the selected supplier.
+  const sup = _supplierByName(product, supEl.value) || reg;
+  bsEl.value = sup && sup.batch_size ? sup.batch_size : '';
+}
+// Re-fill batch size when the user picks a different supplier — they can
+// still edit afterwards for a true one-off contract scenario.
+function _onProdAddSupplierChange() {
+  const product = document.getElementById('sel-product')?.value;
+  const supEl   = document.getElementById('prod-add-supplier');
+  const bsEl    = document.getElementById('prod-add-batchsize');
+  if (!product || !supEl || !bsEl) return;
+  const sup = _supplierByName(product, supEl.value);
+  if (sup && sup.batch_size) bsEl.value = sup.batch_size;
 }
 function addBatchFromProdForm() {
   const product    = document.getElementById('sel-product')?.value;
   const monthInput = document.getElementById('prod-add-month')?.value;
   const batches    = parseInt(document.getElementById('prod-add-batches')?.value, 10);
+  const supplier   = document.getElementById('prod-add-supplier')?.value || '';
+  const bsInput    = parseFloat(document.getElementById('prod-add-batchsize')?.value);
   if (!product) { alert('Pick a spotlight product first.'); return; }
   if (!monthInput) { alert('Pick a month.'); return; }
   if (!batches || batches < 1) { alert('Enter a batch count (1 or more).'); return; }
-  const month = monthInput + '-01';
-  // Stack on top of whatever's already there (base or override).
-  const meta = getMeta(product);
-  const bs   = (parseFloat(document.getElementById('param-batch-size')?.value) > 0
-                ? parseFloat(document.getElementById('param-batch-size')?.value)
-                : meta.batch_size) || 1;
-  const baseRow = (typeof PROD_DATA !== 'undefined')
-    ? PROD_DATA.find(r => r.product === product && r.month === month) : null;
-  const baseBatches = baseRow ? Math.round((baseRow.prod || 0) / bs) : 0;
-  const existingOv  = (prodOverrides[product] || {})[month];
-  const current     = existingOv !== undefined ? existingOv : baseBatches;
-  setProdOverride(product, month, current + batches);
-  // Reset the form for the next add but keep it open.
+  const month   = monthInput + '-01';
+  const regSup  = (typeof getActiveSupplier === 'function') ? getActiveSupplier(product, month) : null;
+  const regName = regSup ? regSup.supplier : null;
+  const regBs   = regSup ? regSup.batch_size : null;
+
+  // Decide whether to store as compact number or rich object.
+  // Rich is needed iff the user picked a non-default supplier OR a non-default
+  // batch size — otherwise compact keeps storage clean.
+  const supplierIsCustom  = supplier && regName && supplier !== regName;
+  const batchSizeIsCustom = bsInput > 0 && Math.abs(bsInput - (regBs || 0)) > 0.0001;
+
+  // Compute "current batches in this month under the chosen supplier's BS".
+  // For supplier-swap scenarios, the existing base/override units don't
+  // make sense to convert at a different BS, so we stack as +batches at the
+  // CHOSEN supplier's BS, replacing whatever was there only if the user is
+  // declaring this slot belongs to a new supplier. Compact case stacks as
+  // before (registry BS).
+  const baseRow     = (typeof PROD_DATA !== 'undefined') ? PROD_DATA.find(r => r.product === product && r.month === month) : null;
+  const effBs       = (bsInput > 0 ? bsInput : (regBs || 1)) || 1;
+  const baseBatches = baseRow ? Math.round((baseRow.prod || 0) / effBs) : 0;
+  const existingOv  = readProdOverride(product, month);
+  const current     = existingOv ? existingOv.batches : baseBatches;
+
+  if (supplierIsCustom || batchSizeIsCustom) {
+    // Rich override — explicit supplier and/or batch size declared.
+    setProdOverride(product, month, current + batches, {
+      supplier:  supplier || null,
+      batchSize: bsInput > 0 ? bsInput : null,
+    });
+  } else {
+    // Compact — purely "more batches under the registry's defaults".
+    setProdOverride(product, month, current + batches);
+  }
+
+  // Reset for next add but keep the form open.
   document.getElementById('prod-add-batches').value = 1;
   if (typeof toast === 'function') {
-    toast(`+${batches} batch${batches === 1 ? '' : 'es'} scheduled for ${monthLabel(month)} (${product})`);
+    const tag = supplierIsCustom ? ` via ${supplier}` : '';
+    toast(`+${batches} batch${batches === 1 ? '' : 'es'} scheduled for ${monthLabel(month)} (${product})${tag}`);
   }
 }
 
@@ -2307,42 +2431,59 @@ function renderProdOverrideTable() {
   const product = document.getElementById('sel-product')?.value;
   if (!product) return;
 
-  const meta      = getMeta(product);
-  const batchSize = (parseFloat(document.getElementById('param-batch-size')?.value) > 0
-                     ? parseFloat(document.getElementById('param-batch-size')?.value)
-                     : meta.batch_size) || 1;
+  const meta = getMeta(product);
 
-  // Get all scheduled months from PROD_DATA for this product
+  // Every scheduled month for this product (committed + override-only months).
   const baseRows = PROD_DATA.filter(r => r.product === product)
     .sort((a,b) => a.month.localeCompare(b.month));
 
-  // Find binding_through for this product from PROD_INPUTS
+  // Override-only months that don't exist in PROD_DATA — surface them too so
+  // the user can manage their per-batch supplier override.
+  const overrideMap = prodOverrides[product] || {};
+  const baseMonths  = new Set(baseRows.map(r => r.month));
+  for (const mo of Object.keys(overrideMap)) {
+    if (!baseMonths.has(mo)) baseRows.push({ month: mo, prod: 0 });
+  }
+  baseRows.sort((a,b) => a.month.localeCompare(b.month));
+
+  // Find binding_through (one value per product across suppliers — uses the
+  // PROD_INPUTS workbook record as before).
   const prodInput = (PROD_INPUTS || []).find(p => p.product === product);
   const bindingThrough = prodInput ? prodInput.binding_through : null;
-  const supplier       = prodInput ? prodInput.supplier : (meta.supplier || '');
 
-  // Only show rows that have base production OR have an override set
-  const overrideMap = prodOverrides[product] || {};
   const showRows = baseRows.filter(r =>
     r.prod > 0 || overrideMap[r.month] !== undefined
   );
 
   if (!showRows.length) {
-    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:12px;">No scheduled production for <strong>${product}</strong> in the view window.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:12px;">No scheduled production for <strong>${product}</strong> in the view window.</td></tr>`;
     return;
   }
 
+  const supplierNames = _uniqueSupplierNames(product);
+
   tbody.innerHTML = showRows.map(r => {
-    const isBinding = bindingThrough && r.month < bindingThrough;
-    const override  = overrideMap[r.month];
-    const hasOverride = override !== undefined;
-    const baseBatches = batchSize > 0 ? Math.round(r.prod / batchSize) : 0;
-    const scenBatches = hasOverride ? override : baseBatches;
+    const isBinding   = bindingThrough && r.month < bindingThrough;
+    const ovNorm      = readProdOverride(product, r.month);
+    const hasOverride = ovNorm !== null;
+    const eff         = getEffectiveSupplierForMonth(product, r.month);
+    const regSup      = (typeof getActiveSupplier === 'function') ? getActiveSupplier(product, r.month) : null;
+    const regName     = regSup ? regSup.supplier : '';
+    const regBs       = regSup ? regSup.batch_size : (meta.batch_size || 1);
+
+    const effSupName  = eff.supplierName || regName || '';
+    const effBs       = eff.batchSize    || regBs   || 1;
+
+    const baseBatches = regBs > 0 ? Math.round(r.prod / regBs) : 0;
+    const scenBatches = hasOverride ? ovNorm.batches : baseBatches;
     const baseUnits   = r.prod;
-    const scenUnits   = scenBatches * batchSize;
+    const scenUnits   = scenBatches * effBs;
     const deltaUnits  = scenUnits - baseUnits;
     const deltaFmt    = deltaUnits === 0 ? '—' : (deltaUnits > 0 ? `+${Math.round(deltaUnits).toLocaleString()}` : Math.round(deltaUnits).toLocaleString());
     const deltaColor  = deltaUnits < 0 ? '#e74c3c' : deltaUnits > 0 ? '#1a7a40' : 'var(--muted)';
+
+    const supDiffers  = hasOverride && ovNorm.supplier  && ovNorm.supplier !== regName;
+    const bsDiffers   = hasOverride && ovNorm.batchSize && Math.abs(ovNorm.batchSize - regBs) > 0.0001;
 
     const rowBg = hasOverride
       ? (isBinding ? 'background:#fff3cd;' : 'background:#e8f5e9;')
@@ -2352,28 +2493,40 @@ function renderProdOverrideTable() {
       ? `<span style="font-size:10px;background:#FFA300;color:#003B5C;padding:1px 6px;border-radius:8px;font-weight:700;">BINDING</span>`
       : `<span style="font-size:10px;background:#d1fae5;color:#065f46;padding:1px 6px;border-radius:8px;font-weight:700;">OPEN</span>`;
 
+    const supDropdown = `<select onchange="setProdOverrideSupplier('${product}','${r.month}', this.value)"
+        title="${supDiffers ? 'Per-batch override — registry default is ' + regName : 'Registry default for this month'}"
+        style="font-size:11px;padding:1px 3px;${supDiffers ? 'border:1px solid var(--gold);background:#fffbeb;font-weight:700;' : ''}">
+      ${supplierNames.map(n => `<option value="${n}" ${n===effSupName?'selected':''}>${n}${n===regName?' (registry)':''}</option>`).join('')}
+    </select>`;
+
+    const bsInput = `<input type="number" min="1" step="1" value="${Math.round(effBs)}"
+        onchange="setProdOverrideBatchSize('${product}','${r.month}', parseFloat(this.value)||0)"
+        title="${bsDiffers ? 'Per-batch override — registry default is ' + Math.round(regBs).toLocaleString() : 'Registry default for this supplier'}"
+        style="width:70px;text-align:right;font-size:11px;padding:1px 3px;${bsDiffers ? 'border:1px solid var(--gold);background:#fffbeb;font-weight:700;' : ''}">`;
+
     return `<tr style="${rowBg}">
       <td style="white-space:nowrap;">${monthLabel(r.month)}</td>
-      <td style="font-size:11px;color:var(--muted);">${supplier}</td>
+      <td>${supDropdown}</td>
+      <td style="text-align:right;">${bsInput}</td>
       <td>${statusLabel}</td>
       <td style="text-align:right;">${baseBatches}</td>
       <td style="text-align:right;">${Math.round(baseUnits).toLocaleString()}</td>
       <td style="text-align:center;">
         <div style="display:flex;align-items:center;justify-content:center;gap:4px;">
-          <button onclick="adjProdOverride('${product}','${r.month}',${batchSize},-1)"
+          <button onclick="adjProdOverride('${product}','${r.month}',-1)"
             style="width:22px;height:22px;border:1px solid var(--border);border-radius:4px;background:var(--card);cursor:pointer;font-size:13px;line-height:1;color:var(--text);">−</button>
           <input type="number" min="0" step="1"
             style="width:50px;text-align:center;padding:2px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--card);color:var(--text);"
             value="${scenBatches}"
-            onchange="setProdOverride('${product}','${r.month}',Math.max(0,parseInt(this.value)||0))"
+            onchange="setProdOverrideBatches('${product}','${r.month}',Math.max(0,parseInt(this.value)||0))"
             ${isBinding ? 'title="Binding period — override with caution"' : ''}>
-          <button onclick="adjProdOverride('${product}','${r.month}',${batchSize},+1)"
+          <button onclick="adjProdOverride('${product}','${r.month}',+1)"
             style="width:22px;height:22px;border:1px solid var(--border);border-radius:4px;background:var(--card);cursor:pointer;font-size:13px;line-height:1;color:var(--text);">+</button>
         </div>
       </td>
       <td style="text-align:right;font-weight:600;color:${deltaColor};">${deltaFmt}</td>
       <td style="text-align:center;">
-        <button onclick="setProdOverride('${product}','${r.month}',0)"
+        <button onclick="setProdOverrideBatches('${product}','${r.month}',0)"
           title="Cancel — set scenario batches to 0"
           style="font-size:10px;padding:2px 7px;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;">Cancel</button>
         ${hasOverride ? `<button onclick="resetProdOverride('${product}','${r.month}')"
@@ -2384,14 +2537,64 @@ function renderProdOverrideTable() {
   }).join('');
 }
 
-function adjProdOverride(product, month, batchSize, delta) {
-  const overrideMap = prodOverrides[product] || {};
-  const meta        = getMeta(product);
-  const bs          = batchSize || meta.batch_size || 1;
-  const baseRow     = PROD_DATA.find(r => r.product === product && r.month === month);
-  const baseBatches = baseRow ? Math.round((baseRow.prod || 0) / bs) : 0;
-  const current     = overrideMap[month] !== undefined ? overrideMap[month] : baseBatches;
-  setProdOverride(product, month, Math.max(0, current + delta));
+// Set just the batch count, preserving any supplier/batchSize override fields.
+function setProdOverrideBatches(product, month, batches) {
+  const ov = readProdOverride(product, month);
+  if (ov && (ov.supplier || ov.batchSize)) {
+    setProdOverride(product, month, batches, { supplier: ov.supplier, batchSize: ov.batchSize });
+  } else {
+    setProdOverride(product, month, batches);
+  }
+}
+// Set just the supplier — auto-fill batchSize from the chosen supplier if
+// the row didn't already carry an explicit BS override. Picking the
+// registry's default supplier clears the supplier override (and any
+// matching BS override).
+function setProdOverrideSupplier(product, month, supplier) {
+  const ov     = readProdOverride(product, month);
+  const regSup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(product, month) : null;
+  const regNm  = regSup ? regSup.supplier : null;
+  const baseRow = PROD_DATA.find(r => r.product === product && r.month === month);
+  const sup     = _supplierByName(product, supplier);
+  const supBs   = sup ? sup.batch_size : null;
+  const batches = ov ? ov.batches : (baseRow && regSup ? Math.round((baseRow.prod || 0) / (regSup.batch_size || 1)) : 0);
+
+  if (supplier === regNm) {
+    // Reset to registry default — drop supplier override; keep batchSize
+    // override only if it still differs from registry.
+    const keepBs = ov && ov.batchSize && Math.abs(ov.batchSize - (regSup.batch_size || 0)) > 0.0001 ? ov.batchSize : null;
+    setProdOverride(product, month, batches, { supplier: null, batchSize: keepBs });
+  } else {
+    // New supplier — adopt that supplier's BS unless an explicit BS
+    // override is already in play and meaningfully different.
+    const useBs = (ov && ov.batchSize && Math.abs(ov.batchSize - (supBs || 0)) > 0.0001) ? ov.batchSize : null;
+    setProdOverride(product, month, batches, { supplier, batchSize: useBs });
+  }
+}
+// Set just the per-batch batchSize, preserving any supplier override.
+function setProdOverrideBatchSize(product, month, bs) {
+  const ov   = readProdOverride(product, month);
+  const eff  = getEffectiveSupplierForMonth(product, month);
+  const regBs = eff && eff.batchSize;
+  const isRegistry = bs > 0 && Math.abs(bs - regBs) <= 0.0001;
+  const batches = ov ? ov.batches : (() => {
+    const baseRow = PROD_DATA.find(r => r.product === product && r.month === month);
+    return baseRow && regBs > 0 ? Math.round((baseRow.prod || 0) / regBs) : 0;
+  })();
+  setProdOverride(product, month, batches, {
+    supplier:  ov ? ov.supplier : null,
+    batchSize: isRegistry ? null : bs,
+  });
+}
+
+function adjProdOverride(product, month, delta) {
+  const ov   = readProdOverride(product, month);
+  const eff  = getEffectiveSupplierForMonth(product, month);
+  const regBs = eff && eff.batchSize;
+  const baseRow = PROD_DATA.find(r => r.product === product && r.month === month);
+  const baseBatches = baseRow && regBs > 0 ? Math.round((baseRow.prod || 0) / regBs) : 0;
+  const current = ov ? ov.batches : baseBatches;
+  setProdOverrideBatches(product, month, Math.max(0, current + delta));
 }
 
 function resetProdOverride(product, month) {
@@ -2447,13 +2650,13 @@ function getActiveSupplier(product, monthIso) {
 // the user has typed an override.
 function resolveSchedParams(product, monthIso, meta) {
   const sup = getActiveSupplier(product, monthIso);
-  const overrideBatch = parseFloat(document.getElementById('param-batch-size')?.value);
+  // Batch size is supplier-driven (registry time-windowed). Per-batch
+  // overrides live on prodOverrides[product][month] and are applied
+  // downstream by getEffectiveProd, not here.
   const overrideLT    = parseFloat(document.getElementById('param-lead-time')?.value);
   const overrideTgt   = parseFloat(document.getElementById('param-target-moh')?.value);
   const overrideCrit  = parseFloat(document.getElementById('param-critical-moh')?.value);
-  const batchSize = (overrideBatch > 0)
-    ? overrideBatch
-    : (sup ? sup.batch_size : (meta.batch_size || 1));
+  const batchSize = sup ? sup.batch_size : (meta.batch_size || 1);
   const leadTime  = (overrideLT > 0)
     ? overrideLT
     : (sup ? sup.lead_time : (meta.lead_time || 3));
@@ -2998,7 +3201,8 @@ function runScenario() {
   meta.critical_moh = parseFloat(document.getElementById('param-critical-moh')?.value) || meta.critical_moh;
   meta.overstock_moh= parseFloat(document.getElementById('param-overstock-moh')?.value)|| meta.overstock_moh;
   meta.lead_time    = parseFloat(document.getElementById('param-lead-time')?.value)    || meta.lead_time;
-  const _pb = parseFloat(document.getElementById('param-batch-size')?.value); if (_pb > 0) meta.batch_size = _pb;
+  // meta.batch_size stays registry-driven (per active supplier). The
+  // param-batch-size input is now read-only and informational.
 
   const baseRows = getBaseRows(product);       // baseline — embedded workbook data
   const scenBase = getScenarioRows(product);   // scenario — baseline + any uploaded customStreams
@@ -3142,18 +3346,21 @@ function runScenario() {
         const lpCommitted = lpProdRows[i]?.prod || 0;
         const dpCommitted = dpProdRows[i]?.prod || 0;
 
-        // Manual overrides
-        const lpOv = (prodOverrides[lpProduct] || {})[month];
-        const dpOv = (prodOverrides[dpProduct] || {})[month];
-        const lpOvProd = (lpOv !== undefined) ? lpOv * lpBatch : null;
-        const dpOvProd = (dpOv !== undefined) ? dpOv * dpBatch : null;
+        // Manual overrides — resolved through getEffectiveProd so a rich
+        // override (per-batch supplier + batch_size) gets translated to
+        // the right unit count, not naively multiplied by the registry's
+        // default BS.
+        const lpEffOv = getEffectiveProd(lpProduct, month, lpBatch, lpCommitted);
+        const dpEffOv = getEffectiveProd(dpProduct, month, dpBatch, dpCommitted);
+        const lpOvActive = lpEffOv.fromOverride;
+        const dpOvActive = dpEffOv.fromOverride;
 
-        let lpProdThisMonth = (lpOv !== undefined) ? lpOvProd : lpCommitted;
-        let dpProdThisMonth = (dpOv !== undefined) ? dpOvProd : dpCommitted;
+        let lpProdThisMonth = lpOvActive ? lpEffOv.units : lpCommitted;
+        let dpProdThisMonth = dpOvActive ? dpEffOv.units : dpCommitted;
 
         // ── SAWTOOTH MRP: schedule additional DP batches if pool is short ──
         let mrpAddedDP = 0;
-        if (avgFuture > 0 && dpBatch > 0 && dpOv === undefined) {
+        if (avgFuture > 0 && dpBatch > 0 && !dpOvActive) {
           const projectedEI_committed = combinedRunningEI - demand + lpProdThisMonth + dpProdThisMonth;
           const targetEI    = TARGET    * avgFuture;
           const overstockEI = OVERSTOCK * avgFuture;
@@ -3175,13 +3382,13 @@ function runScenario() {
 
         // ── GATES ────────────────────────────────────────────────────────
         if (runoutMode) {
-          if (lpOv === undefined) lpProdThisMonth = 0;
-          if (dpOv === undefined) dpProdThisMonth = 0;
+          if (!lpOvActive) lpProdThisMonth = 0;
+          if (!dpOvActive) dpProdThisMonth = 0;
         } else if (suppressPostBinding) {
-          if (lpBindingThrough && month >= lpBindingThrough && lpOv === undefined) {
+          if (lpBindingThrough && month >= lpBindingThrough && !lpOvActive) {
             lpProdThisMonth = 0;
           }
-          if (dpBindingThrough && month >= dpBindingThrough && dpOv === undefined) {
+          if (dpBindingThrough && month >= dpBindingThrough && !dpOvActive) {
             dpProdThisMonth = 0;
           }
         }
@@ -3720,57 +3927,96 @@ function _renderCapacityFlags(product, scenRows, meta) {
   const card = document.getElementById('prod-capacity-card');
   const body = document.getElementById('prod-capacity-body');
   if (!card || !body) return;
-  const sup = (typeof _primarySupplierFor === 'function') ? _primarySupplierFor(product) : null;
-  if (!sup) { card.style.display = 'none'; return; }
-  const bSize = (meta && meta.batch_size) || sup.batch_size || 1;
-  const capM = parseFloat(sup.cap_per_month) || 0;
-  const capY = parseFloat(sup.cap_per_year)  || 0;
-  const moq  = parseFloat(sup.moq_per_year)  || 0;
-  const commDate = (sup.commercialization_date || sup.active_from || '').slice(0,10);
-  if (!capM && !capY && !moq) { card.style.display = 'none'; return; }
-  const yearBatches = {};
-  const monthFlags  = [];
+  if (!scenRows || !scenRows.length) { card.style.display = 'none'; return; }
+
+  // Per-active-supplier tally — each month's units go to whichever supplier
+  // is actually scheduled for that month (registry default or an override).
+  // This is the only way the flags stay correct under a per-batch supplier
+  // override: a March Patheon EU batch counts against Patheon's caps, not
+  // whichever supplier happens to be the registry's primary.
+  const perSup = {};   // name -> { sup, monthly:{m:b}, yearly:{y:b} }
   for (const r of scenRows) {
-    const batches = (r.prod || 0) / (bSize || 1);
-    const m = r.month || '';
-    const y = m.slice(0,4);
-    yearBatches[y] = (yearBatches[y] || 0) + batches;
-    if (capM && batches > capM + 0.001) monthFlags.push({ month: m, batches });
+    const eff = getEffectiveSupplierForMonth(product, r.month);
+    if (!eff || !eff.supplier || !eff.supplierName) continue;
+    const name    = eff.supplierName;
+    const batches = (r.prod || 0) / (eff.batchSize || 1);
+    if (!perSup[name]) perSup[name] = { sup: eff.supplier, monthly: {}, yearly: {} };
+    perSup[name].monthly[r.month] = (perSup[name].monthly[r.month] || 0) + batches;
+    const y = (r.month || '').slice(0, 4);
+    perSup[name].yearly[y] = (perSup[name].yearly[y] || 0) + batches;
   }
-  const yearFlags = [];
-  const moqFlags  = [];
-  for (const y of Object.keys(yearBatches).sort()) {
-    const b = yearBatches[y];
-    if (capY && b > capY + 0.001) yearFlags.push({ y, b });
-    if (moq && (!commDate || y >= commDate.slice(0,4)) && b < moq - 0.001) {
-      moqFlags.push({ y, b, shortfall: moq - b });
+
+  const supNames = Object.keys(perSup).sort();
+  if (!supNames.length) { card.style.display = 'none'; return; }
+
+  const allBlocks   = [];
+  let totalFlags    = 0;
+  let cleanReports  = [];
+
+  for (const name of supNames) {
+    const data = perSup[name];
+    const sup  = data.sup || {};
+    const capM = parseFloat(sup.cap_per_month) || 0;
+    const capY = parseFloat(sup.cap_per_year)  || 0;
+    const moq  = parseFloat(sup.moq_per_year)  || 0;
+    const commDate = (sup.commercialization_date || sup.active_from || '').slice(0,10);
+    if (!capM && !capY && !moq) continue;
+
+    const monthFlags = [];
+    for (const m of Object.keys(data.monthly)) {
+      const b = data.monthly[m];
+      if (capM && b > capM + 0.001) monthFlags.push({ month: m, batches: b });
     }
+    const yearFlags = [];
+    const moqFlags  = [];
+    for (const y of Object.keys(data.yearly).sort()) {
+      const b = data.yearly[y];
+      if (capY && b > capY + 0.001) yearFlags.push({ y, b });
+      if (moq && (!commDate || y >= commDate.slice(0,4)) && b < moq - 0.001) {
+        moqFlags.push({ y, b, shortfall: moq - b });
+      }
+    }
+
+    if (!monthFlags.length && !yearFlags.length && !moqFlags.length) {
+      cleanReports.push(name);
+      continue;
+    }
+
+    const subBlocks = [];
+    if (monthFlags.length) {
+      subBlocks.push(`<div style="margin-bottom:3px;">
+        <span style="color:var(--red);font-weight:700;">▲ ${monthFlags.length} month${monthFlags.length===1?'':'s'} over cap (${capM}/mo):</span>
+        <span style="color:var(--muted);font-size:10px;">${monthFlags.slice(0,12).map(f=>`${f.month.slice(0,7)} (${f.batches.toFixed(1)})`).join(', ')}${monthFlags.length>12?' …':''}</span>
+      </div>`);
+    }
+    if (yearFlags.length) {
+      subBlocks.push(`<div style="margin-bottom:3px;">
+        <span style="color:var(--red);font-weight:700;">▲ ${yearFlags.length} year${yearFlags.length===1?'':'s'} over cap (${capY}/yr):</span>
+        <span style="color:var(--muted);font-size:10px;">${yearFlags.map(f=>`${f.y} (${f.b.toFixed(1)})`).join(', ')}</span>
+      </div>`);
+    }
+    if (moqFlags.length) {
+      subBlocks.push(`<div style="margin-bottom:3px;">
+        <span style="color:var(--gold);font-weight:700;">▼ ${moqFlags.length} year${moqFlags.length===1?'':'s'} under MOQ (${moq}/yr${commDate?', from '+commDate.slice(0,7):''}):</span>
+        <span style="color:var(--muted);font-size:10px;">${moqFlags.map(f=>`${f.y} (${f.b.toFixed(1)}, short ${f.shortfall.toFixed(1)})`).join(', ')}</span>
+      </div>`);
+    }
+    totalFlags += monthFlags.length + yearFlags.length + moqFlags.length;
+    allBlocks.push(`<div style="margin-bottom:6px;padding:6px 8px;border-left:3px solid var(--gold);background:rgba(218,165,32,0.05);">
+      <div style="font-weight:700;color:var(--navy);font-size:11px;margin-bottom:2px;">${name}</div>
+      ${subBlocks.join('')}
+    </div>`);
   }
-  if (!monthFlags.length && !yearFlags.length && !moqFlags.length) {
-    body.innerHTML = `<span style="color:#15803d;font-weight:600;">✓ No capacity breaches or MOQ shortfalls for ${product} (${sup.supplier}).</span>`;
+
+  if (!totalFlags) {
+    body.innerHTML = `<span style="color:#15803d;font-weight:600;">✓ No capacity breaches or MOQ shortfalls for ${product} across ${supNames.length} supplier${supNames.length===1?'':'s'} (${supNames.join(', ')}).</span>`;
     card.style.display = '';
     return;
   }
-  const blocks = [];
-  if (monthFlags.length) {
-    blocks.push(`<div style="margin-bottom:6px;">
-      <span style="color:var(--red);font-weight:700;">▲ ${monthFlags.length} month${monthFlags.length===1?'':'s'} over cap (${capM}/mo):</span>
-      <span style="color:var(--muted);font-size:10px;">${monthFlags.slice(0,12).map(f=>`${f.month.slice(0,7)} (${f.batches.toFixed(1)})`).join(', ')}${monthFlags.length>12?' …':''}</span>
-    </div>`);
+  if (cleanReports.length) {
+    allBlocks.push(`<div style="font-size:10px;color:#15803d;">✓ Clean for: ${cleanReports.join(', ')}</div>`);
   }
-  if (yearFlags.length) {
-    blocks.push(`<div style="margin-bottom:6px;">
-      <span style="color:var(--red);font-weight:700;">▲ ${yearFlags.length} year${yearFlags.length===1?'':'s'} over cap (${capY}/yr):</span>
-      <span style="color:var(--muted);font-size:10px;">${yearFlags.map(f=>`${f.y} (${f.b.toFixed(1)})`).join(', ')}</span>
-    </div>`);
-  }
-  if (moqFlags.length) {
-    blocks.push(`<div style="margin-bottom:6px;">
-      <span style="color:var(--gold);font-weight:700;">▼ ${moqFlags.length} year${moqFlags.length===1?'':'s'} under MOQ (${moq}/yr${commDate?', from '+commDate.slice(0,7):''}):</span>
-      <span style="color:var(--muted);font-size:10px;">${moqFlags.map(f=>`${f.y} (${f.b.toFixed(1)}, short ${f.shortfall.toFixed(1)})`).join(', ')}</span>
-    </div>`);
-  }
-  body.innerHTML = blocks.join('');
+  body.innerHTML = allBlocks.join('');
   card.style.display = '';
 }
 
@@ -4328,8 +4574,15 @@ function updateExpiryTab(product, baseRows, scenRows) {
     const euCombineOn = euCombineEl ? !!euCombineEl.checked : true;
     const supMode     = (typeof supplyMode !== 'undefined') ? supplyMode : 'normal';
     const lpCombine   = document.getElementById('combine-lp-dp')?.checked || false;
-    const pbsOv       = parseFloat(document.getElementById('param-batch-size')?.value);
-    const pbsActive   = pbsOv > 0;
+    // Count prod overrides that carry an explicit supplier or batch-size hint —
+    // these are the "rich" overrides introduced by the per-batch supplier flow.
+    let richProdOvCount = 0;
+    for (const p of Object.keys(prodOverrides)) {
+      for (const m of Object.keys(prodOverrides[p] || {})) {
+        const ov = _normalizeProdOv(prodOverrides[p][m]);
+        if (ov && (ov.supplier || ov.batchSize)) richProdOvCount++;
+      }
+    }
     const customs     = (typeof customStreams === 'object' && customStreams)
                          ? Object.keys(customStreams).length : 0;
     const prodOvCount = Object.keys(prodOverrides[product] || {}).length;
@@ -4377,7 +4630,7 @@ function updateExpiryTab(product, baseRows, scenRows) {
       chip('Lot overrides', lotOvCount, lotOvCount === 0),
       chip('Prod overrides', prodOvCount, prodOvCount === 0),
       chip('Supplier overrides', supOvCount, supOvCount === 0),
-      pbsActive ? flag(true, 'Batch-size override active (' + pbsOv + ')') : '',
+      richProdOvCount ? chip('Per-batch supplier/size overrides', richProdOvCount) : '',
       chip('scen − base cum-demand', (demandDelta >= 0 ? '+' : '') + Math.round(demandDelta).toLocaleString() + (monthlyDiffCount ? ` (${monthlyDiffCount} mo differ, max |Δ|=${maxAbsMonthlyDelta.toFixed(2)})` : ''), Math.abs(demandDelta) < 1 && monthlyDiffCount === 0),
       divergedLots.length
         ? `<span style="color:#dc2626;font-weight:700;" title="${divergedLots.join('\n')}">⚠ ${divergedLots.length} lot(s) base≠scen runout</span>`
@@ -5176,7 +5429,17 @@ function onProductChange() {
   const cmohEl = document.getElementById('param-critical-moh'); if (cmohEl) cmohEl.value = meta.critical_moh || 6;
   const omohEl = document.getElementById('param-overstock-moh');if (omohEl) omohEl.value = meta.overstock_moh|| 18;
   const ltEl   = document.getElementById('param-lead-time');    if (ltEl)   ltEl.value   = meta.lead_time    || 3;
-  const bsEl = document.getElementById('param-batch-size'); if (bsEl) bsEl.value = meta.batch_size || '';
+  // param-batch-size is now read-only and displays the supplier registry's
+  // active batch size for TODAY (so the user can see what scheduling will
+  // pick when no per-batch override is in play).
+  const bsEl = document.getElementById('param-batch-size');
+  if (bsEl) {
+    const todaySup = (typeof getActiveSupplier === 'function')
+                     ? getActiveSupplier(product, new Date().toISOString().slice(0,10))
+                     : null;
+    const bs = (todaySup && todaySup.batch_size) || meta.batch_size || '';
+    bsEl.value = bs ? Number(bs).toLocaleString() + (todaySup ? ' · ' + (todaySup.supplier || '') : '') : '';
+  }
 
   // Starting-BI override field: show current override or workbook default as placeholder
   const biEl = document.getElementById('param-bi-override');
@@ -5822,11 +6085,6 @@ function init() {
     sel.innerHTML = products.map(p => `<option value="${p}">${p}</option>`).join('');
     sel.value = '188mg LP';
   }
-  // Surface the param-batch-size override badge if the input arrives non-empty
-  // (e.g. browser autofill restoring a typed value across reloads).
-  const pbs = document.getElementById('param-batch-size');
-  const pbsBadge = document.getElementById('param-batch-size-badge');
-  if (pbs && pbsBadge && parseFloat(pbs.value) > 0) pbsBadge.style.display = 'inline-block';
   renderRegionToggles();  // also calls renderIndicationToggles()
   onProductChange();
   renderScenarioList();
@@ -6305,14 +6563,15 @@ function renderRunwayTab() {
         if (r.month < cutoff && r.prod > 0) total += r.prod;
       });
     } else {
-      // Non-spotlight product: read PROD_INPUTS + any overrides
+      // Non-spotlight product: read PROD_INPUTS + any overrides. Use the
+      // shared resolver so a rich (per-batch) override resolves correctly.
       const batchSize = prodInput.batch_size || 1;
-      const overrides = (typeof prodOverrides !== 'undefined' && prodOverrides[prod]) || {};
       (prodInput.months || []).forEach(mo => {
         if (mo.month >= cutoff) return;
-        const ov = overrides[mo.month];
-        const qty = ov !== undefined ? ov * batchSize : mo.qty;
-        if (qty > 0) total += qty;
+        const eff = (typeof getEffectiveProd === 'function')
+          ? getEffectiveProd(prod, mo.month, batchSize, mo.qty || 0)
+          : { units: mo.qty || 0 };
+        if (eff.units > 0) total += eff.units;
       });
     }
     return total;
