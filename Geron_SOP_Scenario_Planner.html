@@ -961,6 +961,12 @@ Month inventory becomes available after lead time">Release Month</th>
             <button id="expiry-btn-risk" onclick="setExpiryView('risk')" style="font-size:10px;padding:3px 8px;border:none;cursor:pointer;background:transparent;color:var(--navy);">At-risk only</button>
           </div>
           <button onclick="toggleExpiryAddForm()" style="font-size:10px;padding:3px 8px;cursor:pointer;background:var(--gold);color:var(--navy);border:none;border-radius:4px;font-weight:700;">+ Add lot</button>
+          <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;color:var(--navy);font-weight:600;"
+                 title="Auto-derive projected LP lots from scheduled DP production. DOM = DP month + LP supplier's Mfg LT; Expiry = DOM + LP shelf life. 1:1 unit conversion. Projected lots interleave with real lots in the scenario FEFO chain; base columns stay blank since they aren't real inventory yet.">
+            <input type="checkbox" id="expiry-show-projected" checked
+              onchange="updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache)">
+            Include projected production (DP → LP)
+          </label>
           <a href="javascript:void(0)" onclick="clearLotOverrides(currentProduct); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
              style="font-size:10px;color:var(--muted);text-decoration:underline;margin-left:auto;">reset lots to workbook</a>
           <span id="expiry-override-badge" style="font-size:10px;color:var(--gold);font-weight:700;display:none;">● lot overrides active</span>
@@ -2119,6 +2125,81 @@ function _effectiveFEFOLots() {
   return out;
 }
 
+// ── Projected FDP lots from scheduled DP production ────────────────────────
+// Walks PROD_DATA + prodOverrides for the upstream DP product, projects each
+// produced batch forward to the FDP release month (= DP month + FDP supplier's
+// Mfg LT), and emits a synthetic lot record. Used by the Expiry Risk tab to
+// preview the scrap-risk surface that scenario production will create — DOM
+// gates the FEFO consumption so the projection can't sell through before the
+// FDP actually releases.
+//
+// 1:1 unit conversion (DP→LP is just labeling & packing).
+// Scenario-only: real FEFO_LOTS still come from _effectiveFEFOLots() and the
+// Base FEFO chain never sees these rows.
+function _projectedLotsForProduct(fdpProduct) {
+  const sourceDP = fdpProduct === '188mg LP' ? '200mg DP'
+                 : fdpProduct === '47mg LP'  ? '50mg DP'
+                 : null;
+  if (!sourceDP) return [];
+
+  const shelfMo = (typeof RAW === 'object' && RAW && RAW[fdpProduct]
+                    && RAW[fdpProduct].shelf_life_mo) || 24;
+
+  // Collect every month with either committed DP prod or a scenario override.
+  const dpRows = (typeof PROD_DATA !== 'undefined' ? PROD_DATA : [])
+                  .filter(r => r.product === sourceDP);
+  const ov     = (typeof prodOverrides === 'object' && prodOverrides[sourceDP]) || {};
+  const dpByMonth = {};
+  dpRows.forEach(r => { dpByMonth[r.month] = r; });
+  const monthsSet = new Set([...Object.keys(dpByMonth), ...Object.keys(ov)]);
+  const months    = [...monthsSet].sort();
+
+  const out = [];
+  for (const month of months) {
+    const dpRow = dpByMonth[month] || null;
+    const dpSup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(sourceDP, month) : null;
+    const bs    = (dpSup && dpSup.batch_size)
+                  || (dpRow && dpRow.batch_size)
+                  || (RAW[sourceDP] && RAW[sourceDP].batch_size)
+                  || 1;
+    const committed = dpRow ? (dpRow.prod || 0) : 0;
+    const eff = (typeof getEffectiveProd === 'function')
+                ? getEffectiveProd(sourceDP, month, bs, committed)
+                : { units: committed, fromOverride: false, cancelled: false };
+    if (eff.cancelled || !eff.units || eff.units <= 0) continue;
+
+    // FDP release month = DP month + LP supplier's Mfg LT (Alloc LT is the
+    // buffer BEFORE LP mfg starts, so it doesn't extend release date).
+    const fdpSup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(fdpProduct, month) : null;
+    const lpLT   = Math.round((fdpSup && fdpSup.lead_time != null) ? fdpSup.lead_time
+                              : ((RAW[fdpProduct] && RAW[fdpProduct].lead_time) || 3));
+    const dom    = _monthMinus(month, -lpLT);    // _monthMinus(iso, -n) = iso + n months
+    const expiry = _monthMinus(dom,   -shelfMo);
+
+    // seq must sort projected lots after real ones but in DOM order among themselves.
+    // 10000 base + months-since-epoch gives a stable, monotonic ordering.
+    const domSince = (new Date(dom).getFullYear() - 2020) * 12 + new Date(dom).getMonth();
+
+    out.push({
+      lot:      `PROJ-${sourceDP.replace(/\s/g,'')}-${month.slice(0,7)}` + (eff.fromOverride ? '-SCEN' : ''),
+      product:  fdpProduct,
+      seq:      10000 + domSince,
+      status:   'OK',
+      avail:    eff.units,
+      dom,
+      expiry,
+      runout:   null,
+      risk:     0,
+      supplier: dpSup ? dpSup.supplier : '',
+      _projected:    true,
+      _sourceDP:     sourceDP,
+      _sourceMonth:  month,
+      _fromOverride: !!eff.fromOverride,
+    });
+  }
+  return out;
+}
+
 function getProdOverride(product, month) {
   return (prodOverrides[product] && prodOverrides[product][month] !== undefined)
     ? prodOverrides[product][month] : null;
@@ -2567,9 +2648,13 @@ function applySupplyMode(product, rows, salesFactor) {
 // ══════════════════════════════════════════════════════════════════════════════
 //  FEFO SCENARIO — recalculate runout dates based on scenario demand
 // ══════════════════════════════════════════════════════════════════════════════
-function computeFefoScenario(product, scenRows) {
-  const lots = _effectiveFEFOLots().filter(l => l.product === product)
-    .sort((a,b) => a.seq - b.seq);
+function computeFefoScenario(product, scenRows, lotsOverride) {
+  // Default: real lots filtered to spotlight product. The Expiry Risk tab
+  // passes lotsOverride when it wants to chain projected (DP→LP) lots
+  // alongside the real ones for the Scenario column.
+  const lots = (Array.isArray(lotsOverride) && lotsOverride.length)
+    ? lotsOverride.filter(l => l.product === product).slice().sort((a,b) => (a.seq||0) - (b.seq||0))
+    : _effectiveFEFOLots().filter(l => l.product === product).sort((a,b) => a.seq - b.seq);
   if (!lots.length) return [];
 
   // Build cumulative scenario demand map, then extrapolate beyond the loaded
@@ -4199,18 +4284,20 @@ function updateExpiryTab(product, baseRows, scenRows) {
   const fefoBase = _effectiveFEFOLots().filter(l => l.product === product)
     .sort((a,b) => (a.seq || 0) - (b.seq || 0));
   const fefoInactive = [];
-  // Compute base and scenario runouts via the same FEFO engine so that
-  // scen == base → no spurious risk delta (and both use horizon extrapolation
-  // to avoid runout fallback to expiry).
+  // ── Projected lots: auto-derived from DP production schedule ─────────────
+  // Toggle-gated and scenario-only — real lots own the Base column; projected
+  // lots stretch the Scenario chain with forward-looking FDP inventory so the
+  // user can see what production + supplier LT will yield.
+  const includeProjected = !!document.getElementById('expiry-show-projected')?.checked;
+  const projectedLots    = includeProjected ? _projectedLotsForProduct(product) : [];
+  const allScenLots      = fefoBase.concat(projectedLots)
+                           .sort((a,b) => (a.seq || 0) - (b.seq || 0));
+
   // Pad scenRows with baseRows' real demand tail when scenRows is shorter
   // (it usually is — runMRP horizon < PROD_DATA horizon). Without this,
   // computeFefoScenario extrapolates the scen series past its loaded end
   // using the trailing-12-month average, which flatlines through periods
-  // where real demand is still growing. Result: for terminal lots
-  // (e.g. PPQ 3), fefoScen reaches the cumulative threshold months later
-  // than fefoBase even when demand for every loaded month matches exactly
-  // — triggering false per-lot scenDivergesFromBase and a spurious "at
-  // scrap risk" reading. Padding eliminates the extrapolation gap.
+  // where real demand is still growing.
   let scenRowsEff = scenRows;
   if (Array.isArray(baseRows) && Array.isArray(scenRows) && scenRows.length < baseRows.length) {
     scenRowsEff = scenRows.slice();
@@ -4219,8 +4306,17 @@ function updateExpiryTab(product, baseRows, scenRows) {
       if (br) scenRowsEff.push({ month: br.month, demand: br.demand || 0 });
     }
   }
-  const fefoBaseChained = computeFefoScenario(product, baseRows);
-  const fefoScen        = computeFefoScenario(product, scenRowsEff);
+  // Base chain sees only real lots — projected production isn't real inventory
+  // yet, so the Base column for projected rows correctly reads as blank.
+  const fefoBaseChained = computeFefoScenario(product, baseRows, fefoBase);
+  // Scenario chain sees real + projected, sorted by seq (DOM-aligned for proj).
+  const fefoScen        = computeFefoScenario(product, scenRowsEff, allScenLots);
+  // Lot-ID lookup so buildLotRows can correlate each display row with its
+  // base/scen FEFO entry (array indices no longer align across the two chains).
+  const fefoBaseByLot = {};
+  fefoBaseChained.forEach(r => { if (r && r.lot) fefoBaseByLot[r.lot] = r; });
+  const fefoScenByLot = {};
+  fefoScen.forEach(r => { if (r && r.lot) fefoScenByLot[r.lot] = r; });
 
   // ── Live scenario-state diagnostic ──────────────────────────────────────
   // Every input that perturbs scenRows away from baseRows shows here, so any
@@ -4260,14 +4356,13 @@ function updateExpiryTab(product, baseRows, scenRows) {
         if (Math.abs(d) > maxAbsMonthlyDelta) maxAbsMonthlyDelta = Math.abs(d);
       }
     }
-    // Per-lot divergence audit — show lots whose fefoBase.scenRunout differs
-    // from fefoScen.scenRunout even though demand should match. This catches
-    // computed-runout drift that the netted demandDelta would hide.
+    // Per-lot divergence audit — match by lot ID since projected lots stretch
+    // the scenario chain beyond the base chain's length.
     const divergedLots = [];
-    for (let i = 0; i < fefoBaseChained.length; i++) {
-      const b = fefoBaseChained[i], s = fefoScen[i];
+    fefoBaseChained.forEach(b => {
+      const s = b && b.lot ? fefoScenByLot[b.lot] : null;
       if (b && s && b.scenRunout !== s.scenRunout) divergedLots.push(`${b.lot}: ${b.scenRunout} vs ${s.scenRunout}`);
-    }
+    });
     const chip = (label, val, neutral) => `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="font-weight:600;color:var(--navy);">${label}:</span> <span style="color:${neutral?'var(--muted)':'var(--navy)'};font-weight:${neutral?'400':'700'};">${val}</span></span>`;
     const flag = (cond, label) => cond ? `<span style="display:inline-flex;align-items:center;gap:4px;color:#d97706;font-weight:700;">⚠ ${label}</span>` : '';
     _stateEl.innerHTML = [
@@ -4290,7 +4385,7 @@ function updateExpiryTab(product, baseRows, scenRows) {
     ].filter(Boolean).join('');
   }
 
-  if (!fefoBase.length) {
+  if (!fefoBase.length && !projectedLots.length) {
     // Diagnose: is the workbook's seed empty for this product, or has the
     // override layer hidden everything (e.g. stale _deleted flags from a
     // prior session in localStorage)?
@@ -4424,14 +4519,17 @@ function updateExpiryTab(product, baseRows, scenRows) {
     };
   }
 
-  // Build display lots — active product first, then inactive product (all at risk)
+  // Build display lots — active product first, then inactive product (all at risk).
+  // Projected lots (from DP→LP) skip the Base column entirely (the base FEFO
+  // chain never sees them); they get scen runout/risk only.
   function buildLotRows(lotList, forceAtRisk, lotProduct) {
     return lotList.map((lot, i) => {
       const effExp     = effectiveExpiry(lot.expiry);       // short-date adjusted
       const lotStatus  = lot.status || 'OK';
       const isOnHold   = lotStatus === 'On Hold';
-      const baseLot    = lotProduct === product ? fefoBaseChained[i] : null;
-      const scenLot    = lotProduct === product ? fefoScen[i]        : null;
+      const isProj     = !!lot._projected;
+      const baseLot    = (lotProduct === product && !isProj) ? (fefoBaseByLot[lot.lot] || null) : null;
+      const scenLot    = lotProduct === product                ? (fefoScenByLot[lot.lot] || null) : null;
 
       // Trust the workbook for the BASE view. lot.runout and lot.risk are
       // precomputed values exported with the planner — live demand recompute
@@ -4444,11 +4542,17 @@ function updateExpiryTab(product, baseRows, scenRows) {
       // model says scenario differs from base (e.g. sales-factor moved, prod
       // override added, lot edited). When scen == base, scenRunout falls
       // back to the workbook so no spurious "NEW RISK" appears.
-      const baseRunout = (isOnHold || forceAtRisk) ? effExp : (lot.runout || lot.expiry);
+      // Projected lots have no workbook lot.runout — they live entirely on the
+      // computed scen chain. baseRunout intentionally stays empty for them so
+      // the table reads "—" (matches the scenario-only nature of projections).
+      const baseRunout = isProj ? '' :
+        (isOnHold || forceAtRisk) ? effExp : (lot.runout || lot.expiry);
       // Did the live demand model diverge between base and scenario?
       const scenDivergesFromBase = baseLot && scenLot
         && baseLot.scenRunout !== scenLot.scenRunout;
-      const scenRunout = (isOnHold || forceAtRisk) ? effExp
+      const scenRunout = isProj
+        ? (scenLot?.scenRunout || lot.expiry)
+        : (isOnHold || forceAtRisk) ? effExp
         : (scenDivergesFromBase ? (scenLot?.scenRunout || lot.expiry)
                                 : (lot.runout || lot.expiry));
       const effectiveStart = (isOnHold || forceAtRisk) ? null : (scenLot?.effectiveStart || baseLot?.effectiveStart || null);
@@ -4461,22 +4565,30 @@ function updateExpiryTab(product, baseRows, scenRows) {
       // Risk: trust the workbook for the BASE flag/qty. For SCEN, use
       // workbook unless the scenario actually diverges; then use computed
       // (clamp lot.avail − cumDemandAt(effExp) against lotCum).
-      const bRisk = new Date(baseRunout) > new Date(effExp);
+      // Projected lots: no base risk by definition (they aren't real inventory).
+      const bRisk = isProj ? false : new Date(baseRunout) > new Date(effExp);
       const sRisk = new Date(scenRunout) > new Date(effExp);
-      const baseRisk = (isOnHold || forceAtRisk) ? lot.avail : (lot.risk || 0);
+      const baseRisk = isProj ? 0
+        : (isOnHold || forceAtRisk) ? lot.avail : (lot.risk || 0);
       const scenRiskComputed = (scenLot && fefoScen.cumDemandAt)
         ? Math.min(lot.avail, Math.max(0, (scenLot.lotCum || 0) - fefoScen.cumDemandAt(effExp)))
         : 0;
-      const scenRisk = (isOnHold || forceAtRisk) ? lot.avail
+      const scenRisk = isProj ? scenRiskComputed
+        : (isOnHold || forceAtRisk) ? lot.avail
         : (scenDivergesFromBase ? scenRiskComputed : (lot.risk || 0));
       // Δ tied to qty (not just boolean) so cosmetic month-boundary differences
       // when scen==base don't trip "NEW RISK qty 0".
       let statusDelta = '—';
-      if (scenRisk > baseRisk + 0.5)      statusDelta = '⬆ NEW RISK';
-      else if (baseRisk > scenRisk + 0.5) statusDelta = '⬇ RESOLVED';
+      if (!isProj) {
+        if (scenRisk > baseRisk + 0.5)      statusDelta = '⬆ NEW RISK';
+        else if (baseRisk > scenRisk + 0.5) statusDelta = '⬇ RESOLVED';
+      }
 
+      // Projected lots have no base runout; use the scen window for avg demand.
+      const _avgEnd   = isProj ? scenRunout : baseRunout;
+      const _avgStart = consumeStart || _avgEnd;
       const monthlyDemand = (isOnHold || forceAtRisk) ? 0
-        : avgDemandForLot(lotProduct, consumeStart || baseRunout, baseRunout);
+        : avgDemandForLot(lotProduct, _avgStart, _avgEnd);
 
       // Release By — only for On Hold lots — capture full justification for tooltip
       let releaseBy = null;
@@ -4492,11 +4604,17 @@ function updateExpiryTab(product, baseRows, scenRows) {
                baseRunout, scenRunout, consumeStart, effectiveStart, avail: lot.avail,
                gapStart, gapEnd, gapQty,
                baseRisk, scenRisk, bRisk, sRisk, statusDelta,
-               monthlyDemand, releaseBy, releaseByInfo };
+               monthlyDemand, releaseBy, releaseByInfo,
+               isProjected: isProj,
+               sourceDP:    lot._sourceDP || null,
+               sourceMonth: lot._sourceMonth || null,
+               fromOverride: !!lot._fromOverride,
+               supplier:    lot.supplier || '' };
     });
   }
 
-  const lots = buildLotRows(fefoBase, inactiveProduct, product);
+  // Render real lots + projected lots together in scenario seq order.
+  const lots = buildLotRows(allScenLots, inactiveProduct, product);
 
   // Override badge
   const obEl = document.getElementById('expiry-override-badge');
@@ -4509,37 +4627,55 @@ function updateExpiryTab(product, baseRows, scenRows) {
   const tbody = document.querySelector('#tbl-expiry tbody');
   const safe = s => String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;');
   tbody.innerHTML = lots.map(l => {
-    const rowStyle = l.isOnHold
-      ? 'background:rgba(245,158,11,0.10);border-left:3px solid #f59e0b'
-      : l.forceAtRisk
-        ? 'background:rgba(249,65,58,0.08);border-left:3px solid #dc2626'
-        : l.bRisk || l.sRisk
-          ? 'background:rgba(249,65,58,0.04)'
-          : '';
-    const ovEntry  = getLotOverride(l.product, l.lot);
+    const isProj   = !!l.isProjected;
+    const rowStyle = isProj
+      ? 'background:rgba(0,94,184,0.05);border-left:3px solid var(--navy-light);'
+      : l.isOnHold
+        ? 'background:rgba(245,158,11,0.10);border-left:3px solid #f59e0b'
+        : l.forceAtRisk
+          ? 'background:rgba(249,65,58,0.08);border-left:3px solid #dc2626'
+          : l.bRisk || l.sRisk
+            ? 'background:rgba(249,65,58,0.04)'
+            : '';
+    const ovEntry  = isProj ? null : getLotOverride(l.product, l.lot);
     const isAdded  = !!(ovEntry && ovEntry._added);
     const isMod    = !!(ovEntry && !ovEntry._added && !ovEntry._deleted);
-    const lotLabelCell = `<td style="font-family:monospace;font-size:11px;${(isAdded||isMod) ? 'border-left:2px solid var(--gold);padding-left:6px;' : ''}">${l.lot}${isAdded ? ' <span style=\"font-size:8px;color:var(--gold);font-weight:700;\">NEW</span>' : ''}</td>`;
+    // Projected lots get a navy PROJECTED chip; the tooltip surfaces the
+    // upstream DP source month so the user can trace it back to Production.
+    const projBadge = isProj
+      ? ` <span title="Projected from ${l.sourceDP || 'DP'} production at ${l.sourceMonth ? l.sourceMonth.slice(0,7) : '?'} via ${l.supplier || '(no supplier)'}${l.fromOverride ? ' — includes scenario override' : ''}. DOM = DP month + FDP supplier Mfg LT. Expiry = DOM + shelf life. Change the Production Schedule tab to adjust." style="font-size:8px;background:var(--navy-light);color:white;border-radius:3px;padding:1px 4px;font-weight:700;">PROJ${l.fromOverride ? '+SCEN' : ''}</span>`
+      : '';
+    const lotLabelCell = `<td style="font-family:monospace;font-size:11px;${(isAdded||isMod) ? 'border-left:2px solid var(--gold);padding-left:6px;' : ''}">${l.lot}${isAdded ? ' <span style=\"font-size:8px;color:var(--gold);font-weight:700;\">NEW</span>' : ''}${projBadge}</td>`;
     const inactiveBadge = l.forceAtRisk && l.product !== product
       ? ' <span style="font-size:9px;background:#dc2626;color:white;border-radius:3px;padding:1px 4px">no demand</span>'
       : '';
     const statusColor = l.lotStatus === 'On Hold' ? '#f59e0b'
                       : l.lotStatus === 'At Risk' ? '#dc2626' : '#15803d';
-    const statusCell = `<td><select onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{status: this.value}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
-        style="font-size:10px;padding:2px 4px;color:${statusColor};font-weight:700;background:transparent;border:1px solid ${statusColor}33;border-radius:3px;">
-        ${['OK','On Hold','At Risk'].map(s => `<option value="${s}" ${s===l.lotStatus?'selected':''}>${s}</option>`).join('')}
-      </select></td>`;
-    const expCell = `<td><input type="date" value="${(l.expiry||'').slice(0,10)}"
-        onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{expiry: this.value}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
-        style="font-size:10px;padding:1px 3px;width:120px;">${shortDateMo ? `<div style="font-size:9px;color:#d97706;">eff: ${l.effExp.slice(0,10)}</div>` : ''}</td>`;
+    // Projected lots: render read-only cells — to change them, edit the
+    // Production Schedule. Their state is a derivation, not a real lot.
+    const statusCell = isProj
+      ? `<td style="font-size:10px;color:var(--navy-light);font-weight:700;">Projected</td>`
+      : `<td><select onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{status: this.value}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+          style="font-size:10px;padding:2px 4px;color:${statusColor};font-weight:700;background:transparent;border:1px solid ${statusColor}33;border-radius:3px;">
+          ${['OK','On Hold','At Risk'].map(s => `<option value="${s}" ${s===l.lotStatus?'selected':''}>${s}</option>`).join('')}
+        </select></td>`;
+    const expCell = isProj
+      ? `<td style="font-size:10px;color:var(--muted);">${(l.expiry||'').slice(0,10)}${shortDateMo ? `<div style="font-size:9px;color:#d97706;">eff: ${l.effExp.slice(0,10)}</div>` : ''}</td>`
+      : `<td><input type="date" value="${(l.expiry||'').slice(0,10)}"
+          onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{expiry: this.value}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+          style="font-size:10px;padding:1px 3px;width:120px;">${shortDateMo ? `<div style="font-size:9px;color:#d97706;">eff: ${l.effExp.slice(0,10)}</div>` : ''}</td>`;
     const hasGap   = l.dom && l.consumeStart && l.dom > l.consumeStart;
     const domColor = hasGap ? '#d97706' : 'inherit';
-    const domCell = `<td><input type="date" value="${(l.dom||'').slice(0,10)}"
-        onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{dom: this.value || null}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
-        style="font-size:10px;padding:1px 3px;width:120px;color:${domColor};${hasGap?'font-weight:700;':''}">${hasGap ? `<div title="FEFO chain wants this lot by ${l.consumeStart.slice(0,7)} but it isn\'t manufactured until ${l.dom.slice(0,7)} — yellow production gap shown on the Gantt." style="font-size:9px;color:#d97706;">⚠ gap: needs ${l.consumeStart.slice(0,7)}</div>` : ''}</td>`;
-    const qtyCell = `<td style="text-align:right;"><input type="number" min="0" step="1" value="${l.avail}"
-        onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{avail: parseFloat(this.value)||0}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
-        style="font-size:10px;padding:1px 3px;width:80px;text-align:right;"></td>`;
+    const domCell = isProj
+      ? `<td style="font-size:10px;color:var(--muted);">${(l.dom||'').slice(0,10)}</td>`
+      : `<td><input type="date" value="${(l.dom||'').slice(0,10)}"
+          onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{dom: this.value || null}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+          style="font-size:10px;padding:1px 3px;width:120px;color:${domColor};${hasGap?'font-weight:700;':''}">${hasGap ? `<div title="FEFO chain wants this lot by ${l.consumeStart.slice(0,7)} but it isn\'t manufactured until ${l.dom.slice(0,7)} — yellow production gap shown on the Gantt." style="font-size:9px;color:#d97706;">⚠ gap: needs ${l.consumeStart.slice(0,7)}</div>` : ''}</td>`;
+    const qtyCell = isProj
+      ? `<td style="text-align:right;font-size:10px;color:var(--muted);">${Math.round(l.avail).toLocaleString()}</td>`
+      : `<td style="text-align:right;"><input type="number" min="0" step="1" value="${l.avail}"
+          onchange="setLotOverride('${safe(l.product)}','${safe(l.lot)}',{avail: parseFloat(this.value)||0}); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+          style="font-size:10px;padding:1px 3px;width:80px;text-align:right;"></td>`;
     const demandDisplay = l.monthlyDemand > 0
       ? fmt(l.monthlyDemand, 0)
       : (l.isOnHold || l.forceAtRisk) ? '<span style="color:#dc2626;font-style:italic">none</span>' : '—';
@@ -4575,8 +4711,12 @@ function updateExpiryTab(product, baseRows, scenRows) {
       releaseByCell = `<td title="${tip.replace(/"/g,'&quot;')}" style="color:${rbColor};font-weight:700;white-space:nowrap;cursor:help;text-decoration:underline dotted ${rbColor};">${rbStr}${rbLabel}</td>`;
     }
 
-    const delCell = `<td style="text-align:center;"><button title="Delete lot" onclick="deleteLot('${safe(l.product)}','${safe(l.lot)}'); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
-        style="font-size:12px;background:none;border:none;color:var(--red);cursor:pointer;">✕</button></td>`;
+    // Projected lots can't be deleted from the table — adjust the Production
+    // Schedule tab instead. Render an empty cell so the column still aligns.
+    const delCell = isProj
+      ? `<td></td>`
+      : `<td style="text-align:center;"><button title="Delete lot" onclick="deleteLot('${safe(l.product)}','${safe(l.lot)}'); updateExpiryTab(currentProduct, baseRowsCache, scenRowsCache); runScenario();"
+          style="font-size:12px;background:none;border:none;color:var(--red);cursor:pointer;">✕</button></td>`;
 
     return `<tr style="${rowStyle}">
       ${lotLabelCell}
