@@ -1170,7 +1170,7 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
         <div class="card-header">
           <div>
             <div class="card-title" id="cpool-tiered-title">FDP &amp; DP — Inventory + Production with Safety Stock</div>
-            <div class="card-subtitle">Stacked monthly: <b>FDP inventory</b> (navy) + <b>FDP production</b> (Geron-blue = binding · green = non-binding) + <b>DP inventory</b> (gold) + <b>DP production</b> (purple = binding · green = non-binding). Lines (foreground): monthly demand (gold), 1-yr rolling cumulative demand (red), 2-yr rolling cumulative demand (navy). Re-renders live on every scenario / supplier / sales-factor change.</div>
+            <div class="card-subtitle">Stacked monthly: <b>FDP inventory</b> (navy) + <b>FDP production</b> (Geron-blue = binding · green = non-binding) + <b>DP inventory</b> (gold) + <b>DP production</b> (purple = binding · green = non-binding). Lines (foreground): monthly demand (cyan), 1-yr rolling cumulative demand (red), 2-yr rolling cumulative demand (navy). Re-renders live on every scenario / supplier / sales-factor change.</div>
           </div>
         </div>
         <div class="chart-container" style="height:340px;">
@@ -8347,17 +8347,18 @@ function runCombinedPoolTab() {
     data: {
       labels,
       datasets: [
-        // Bars: order=0 draws first → behind the lines.
-        { label: `${lpProd} Inventory`,  data: lpInvD,  backgroundColor: FDP_INV,  stack: 'tier', borderRadius: 0, order: 0 },
-        { label: `${lpProd} Production`, data: lpProdD, backgroundColor: lpProdCol, stack: 'tier', borderRadius: 0, order: 0 },
-        { label: `${dpProd} Inventory`,  data: dpInvD,  backgroundColor: DP_INV,   stack: 'tier', borderRadius: 0, order: 0 },
-        { label: `${dpProd} Production`, data: dpProdD, backgroundColor: dpProdCol, stack: 'tier', borderRadius: 0, order: 0 },
-        // Lines: order=5 draws last → renders on top of the stack. Wider
-        // strokes and darker palette tones so they stay legible against
-        // the saturated bar fills.
-        { label: 'Forecasted Demand',    data: demandD,   type: 'line', borderColor: '#FFA300', borderWidth: 3, pointRadius: 0, fill: false, order: 5 },
-        { label: '1-yr Safety Stock',    data: safety1yr, type: 'line', borderColor: '#F9413A', borderWidth: 3, pointRadius: 0, fill: false, order: 5 },
-        { label: '2-yr Safety Stock',    data: safety2yr, type: 'line', borderColor: '#003B5C', borderWidth: 3, pointRadius: 0, fill: false, order: 5 },
+        // Chart.js draws HIGHER `order` first, so bars sit at order:10 (drawn
+        // behind) and lines at order:0 (drawn last → on top of the stack).
+        // Demand line stays off --gold because it collides with the DP
+        // Inventory fill; --cyan is the only palette tone that doesn't clash
+        // with any of the bar colors.
+        { label: `${lpProd} Inventory`,  data: lpInvD,  backgroundColor: FDP_INV,  stack: 'tier', borderRadius: 0, order: 10 },
+        { label: `${lpProd} Production`, data: lpProdD, backgroundColor: lpProdCol, stack: 'tier', borderRadius: 0, order: 10 },
+        { label: `${dpProd} Inventory`,  data: dpInvD,  backgroundColor: DP_INV,   stack: 'tier', borderRadius: 0, order: 10 },
+        { label: `${dpProd} Production`, data: dpProdD, backgroundColor: dpProdCol, stack: 'tier', borderRadius: 0, order: 10 },
+        { label: 'Forecasted Demand',    data: demandD,   type: 'line', borderColor: '#05C3DD', borderWidth: 3.5, pointRadius: 0, fill: false, order: 0 },
+        { label: '1-yr Safety Stock',    data: safety1yr, type: 'line', borderColor: '#F9413A', borderWidth: 3,   pointRadius: 0, fill: false, order: 0 },
+        { label: '2-yr Safety Stock',    data: safety2yr, type: 'line', borderColor: '#003B5C', borderWidth: 3,   pointRadius: 0, fill: false, order: 0 },
       ],
     },
     options: { responsive: true, maintainAspectRatio: false,
