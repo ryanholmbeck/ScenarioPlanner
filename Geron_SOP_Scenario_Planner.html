@@ -1178,6 +1178,20 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
         </div>
       </div>
 
+      <!-- Drug Substance tier — same style, driven by the pair selector
+           (DS demand derived from whichever DP product is in view). -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title" id="cpool-ds-title">Drug Substance — Inventory + Production with Safety Stock</div>
+            <div class="card-subtitle">Stacked monthly: <b>DS inventory</b> (navy) + <b>DS production</b> (Geron-blue = binding · green = non-binding). Lines (foreground): monthly DS demand (cyan) and rolling 1-yr / 2-yr cumulative DS demand (red / navy). DS demand is derived from the chosen DP product's production schedule via the dependency factor, so it inherits the lumpy by-batch profile (the deck calls this out — DS demand is per-DP-batch, not smooth like patient demand). Binding window = 18 months from today.</div>
+          </div>
+        </div>
+        <div class="chart-container" style="height:300px;">
+          <canvas id="cpool-chart-ds"></canvas>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-header">
           <div>
@@ -8401,6 +8415,113 @@ function runCombinedPoolTab() {
   // Update card title to reflect the active pair.
   const tt = document.getElementById('cpool-tiered-title');
   if (tt) tt.textContent = `${lpProd} & ${dpProd} — Inventory + Production with Safety Stock`;
+
+  // ── DS (Drug Substance) tier ─────────────────────────────────────────
+  // DS demand is derived from the chosen DP product's production schedule
+  // via the dependency factor (DS kg per DP batch). Inventory + scheduled
+  // batches come from running MRP on Drug Substance with that demand —
+  // matches the standard cascade path but scoped to whichever pair the
+  // user has selected, so 200mg DP and 50mg DP each get their own view.
+  let dsRows = [];
+  let dsDemByMonth = {};
+  try {
+    if (typeof deriveChildDemand === 'function' && typeof getBaseRows === 'function') {
+      const dpRowsForDS = scenRows.map(r => ({ month: r.month, prod: r.dpProd }));
+      dsDemByMonth = deriveChildDemand(dpProd, dpRowsForDS, 'Drug Substance');
+      const dsBase = getBaseRows('Drug Substance');
+      if (dsBase.length && typeof applyDerivedDemand === 'function' && typeof runMRP === 'function') {
+        const dsWithDem = applyDerivedDemand(dsBase, dsDemByMonth);
+        const dsMeta   = getMeta('Drug Substance');
+        const dsFull   = runMRP(dsWithDem, 100, dsMeta, dsBase.length, 'Drug Substance');
+        dsRows = dsFull.slice(0, viewRows.length);
+      }
+    }
+  } catch (e) { console.warn('Combined Pool — DS chart compute failed:', e); }
+
+  if (dsRows.length) {
+    const dsInvD  = dsRows.map(r => r.ei);
+    const dsProdD = dsRows.map(r => r.prod);
+    const dsDemD  = viewRows.map(r => dsDemByMonth[r.month] || 0);
+
+    // Binding window for DS = 18 months from today (user-specified). DS
+    // production months that fall before this date render in the binding
+    // palette; later months render green.
+    const _today = new Date();
+    const _ds18  = new Date(Date.UTC(_today.getUTCFullYear(), _today.getUTCMonth() + 18, 1))
+                     .toISOString().slice(0, 10);
+    const DS_INV_C  = '#003B5C';   // --navy
+    const DS_BIND_C = '#005EB8';   // --navy-light (Geron blue)
+    const dsProdColors = viewRows.map(r => (r.month < _ds18) ? DS_BIND_C : NONBIND);
+
+    // Rolling 12 / 24-month forward DS demand sums. DS demand only exists
+    // for the months where DP production fired, so the safety lines will
+    // dip toward the right edge — flagged in the card subtitle.
+    const dsSafety1yr = viewRows.map((r, i) => {
+      let sum = 0;
+      for (let j = i; j < Math.min(i + 12, viewRows.length); j++) sum += dsDemD[j] || 0;
+      return sum;
+    });
+    const dsSafety2yr = viewRows.map((r, i) => {
+      let sum = 0;
+      for (let j = i; j < Math.min(i + 24, viewRows.length); j++) sum += dsDemD[j] || 0;
+      return sum;
+    });
+
+    // Active DS supplier name for the card title — sourced from the
+    // registry rather than hard-coded "ST Pharm" so it stays in sync if
+    // routing changes.
+    const dsActive = (typeof getActiveSupplier === 'function')
+      ? getActiveSupplier('Drug Substance', viewRows[0]?.month || _today.toISOString().slice(0,10))
+      : null;
+    const dsSupLabel = dsActive ? dsActive.supplier : 'Drug Substance';
+
+    const dsTitle = document.getElementById('cpool-ds-title');
+    if (dsTitle) dsTitle.textContent = `Drug Substance (${dsSupLabel}) — Inventory + Production with Safety Stock — driven by ${dpProd}`;
+
+    destroyChart('cpool-chart-ds');
+    charts['cpool-chart-ds'] = new Chart(document.getElementById('cpool-chart-ds'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: 'DS Inventory',  data: dsInvD,  backgroundColor: DS_INV_C, stack: 'ds', borderRadius: 0, order: 10 },
+          { label: 'DS Production', data: dsProdD, backgroundColor: dsProdColors, stack: 'ds', borderRadius: 0, order: 10 },
+          { label: 'DS Demand',           data: dsDemD,     type: 'line', borderColor: '#05C3DD', backgroundColor: '#05C3DD', borderWidth: 4,   pointRadius: 2, pointBackgroundColor: '#05C3DD', fill: false, order: 0 },
+          { label: '1-yr Safety Stock',   data: dsSafety1yr, type: 'line', borderColor: '#F9413A', backgroundColor: '#F9413A', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#F9413A', fill: false, order: 0 },
+          { label: '2-yr Safety Stock',   data: dsSafety2yr, type: 'line', borderColor: '#003B5C', backgroundColor: '#003B5C', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#003B5C', fill: false, order: 0 },
+        ],
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { font: { size: 10 }, boxWidth: 12 } },
+          tooltip: { mode: 'index', intersect: false,
+            callbacks: { footer: (items) => {
+              const i = items[0]?.dataIndex;
+              if (i == null || !viewRows[i]) return '';
+              return viewRows[i].month < _ds18 ? `Binding (within 18 mo of today)` : 'Non-binding';
+            }}
+          }
+        },
+        scales: {
+          x: { ticks: { maxTicksLimit: 18, font: { size: 10 } }, stacked: true },
+          y: { ticks: { font: { size: 10 } }, beginAtZero: true, stacked: true, title: { display: true, text: 'kg', font: { size: 10 } } }
+        }
+      },
+      plugins: [cpoolLinesOnTop],
+    });
+  } else {
+    // DS dependency missing or cascade not wired — surface a quiet hint
+    // rather than leaving a blank canvas.
+    destroyChart('cpool-chart-ds');
+    const ctx = document.getElementById('cpool-chart-ds')?.getContext('2d');
+    if (ctx) {
+      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      ctx.font = '12px sans-serif';
+      ctx.fillStyle = '#5a7a8a';
+      ctx.textAlign = 'center';
+      ctx.fillText('Drug Substance data unavailable for this pair.', ctx.canvas.width / 2, ctx.canvas.height / 2);
+    }
+  }
 
   // ── Inventory chart ───────────────────────────────────────────────────
   const bEI      = baseRows.slice(0, viewRows.length).map(r => r.ei);
