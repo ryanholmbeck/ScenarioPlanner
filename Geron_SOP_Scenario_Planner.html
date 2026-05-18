@@ -1163,7 +1163,21 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
       <!-- KPI row -->
       <div class="kpi-row" id="cpool-kpi-row" style="margin-bottom:10px;"></div>
 
-      <!-- Inventory + MOH chart -->
+      <!-- Tiered stacked-bar — inventory + production by tier with rolling
+           safety stock overlays. Mirrors the "188mg DP and 188mg FDP
+           Production Planning" deck slide. -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title" id="cpool-tiered-title">FDP &amp; DP — Inventory + Production with Safety Stock</div>
+            <div class="card-subtitle">Stacked monthly: <b>FDP inventory</b> (dark blue) + <b>FDP production</b> (lavender = binding · green = non-binding) + <b>DP inventory</b> (orange) + <b>DP production</b> (purple = binding · green = non-binding). Lines: monthly demand (yellow), 1-yr rolling cumulative demand (red), 2-yr rolling cumulative demand (navy).</div>
+          </div>
+        </div>
+        <div class="chart-container" style="height:340px;">
+          <canvas id="cpool-chart-tiered"></canvas>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-header">
           <div>
@@ -8173,6 +8187,15 @@ function runCombinedPoolTab() {
 
   const scenRows = [];
 
+  // Per-tier running inventory — the combined pool MRP only carries a single
+  // pool number, but the tiered stacked-bar chart needs FDP (LP) and DP
+  // inventory separately. Model: LP demand depletes LP first; LP production
+  // grows LP and depletes DP (because LP is created by packaging DP);
+  // DP production grows DP. Clamp at zero per tier — the pool MOH is the
+  // adequacy signal, this disaggregation is descriptive.
+  let lpRunningEI = (lpScen[0]?.bi || 0);
+  let dpRunningEI = (dpScen[0]?.bi || 0);
+
   for (let i = 0; i < len; i++) {
     const lpRow = lpScen[i];
     const dpRow = dpScen[i];
@@ -8236,6 +8259,12 @@ function runCombinedPoolTab() {
     const moh    = avgFuture > 0 ? poolEI / avgFuture : (poolEI > 0 ? 999 : 0);
     const risk   = riskClass(moh, { target_moh: tgtMOH, critical_moh: critMOH, overstock_moh: overstockMOH });
 
+    // Per-tier EI tracking for the stacked-bar chart. See loop preamble.
+    const lpEI = Math.max(lpRunningEI - demand + lpProdAmt, 0);
+    const dpEI = Math.max(dpRunningEI + dpProdAmt - lpProdAmt, 0);
+    lpRunningEI = lpEI;
+    dpRunningEI = dpEI;
+
     scenRows.push({
       month:     month,
       ml:        lpRow.ml,
@@ -8245,6 +8274,8 @@ function runCombinedPoolTab() {
       dpProd:    Math.round(dpProdAmt * 100) / 100,
       prod:      Math.round(dpProdAmt * 100) / 100,
       ei:        Math.round(poolEI * 100) / 100,
+      lpEI:      Math.round(lpEI),
+      dpEI:      Math.round(dpEI),
       moh:       Math.round(moh * 100) / 100,
       risk,
       supplier:  dpSupParams.supplier,
@@ -8271,8 +8302,84 @@ function runCombinedPoolTab() {
     <div class="kpi-card"><div class="kpi-label">At-Risk Months</div><div class="kpi-val ${lowRisk > 0 ? 'neg' : 'pos'}">${lowRisk}</div><div class="kpi-delta" style="color:var(--muted)">of ${horizon} months</div></div>
   `;
 
+  // ── Tiered stacked-bar chart ─────────────────────────────────────────
+  // Stacked monthly: FDP (LP) inventory + DP inventory + FDP production +
+  // DP production, with binding/non-binding color coding on production
+  // segments based on each tier's binding_through window. Lines overlay
+  // monthly demand and rolling 1-yr / 2-yr cumulative-demand safety stock.
+  const labels  = viewRows.map(r => monthLabel(r.month));
+  const lpBT    = (typeof PROD_INPUTS !== 'undefined') ?
+                  (PROD_INPUTS.find(p => p.product === lpProd)?.binding_through || null) : null;
+  const dpBT    = (typeof PROD_INPUTS !== 'undefined') ?
+                  (PROD_INPUTS.find(p => p.product === dpProd)?.binding_through || null) : null;
+  const lpInvD  = viewRows.map(r => r.lpEI);
+  const dpInvD  = viewRows.map(r => r.dpEI);
+  const lpProdD = viewRows.map(r => r.lpProd);
+  const dpProdD = viewRows.map(r => r.dpProd);
+  const demandD = viewRows.map(r => r.demand);
+  // Per-month production fill: purple = binding window, green = non-binding.
+  // Two distinct purples so FDP and DP production are still visually
+  // distinguishable inside the binding window.
+  const FDP_BIND   = 'rgba(155,121,209,0.92)';   // lavender (matches the deck)
+  const DP_BIND    = 'rgba(112,48,160,0.92)';    // deep purple (matches the deck)
+  const NONBIND    = 'rgba(82,168,82,0.92)';     // green
+  const lpProdCol  = viewRows.map(r => (lpBT && r.month < lpBT) ? FDP_BIND : NONBIND);
+  const dpProdCol  = viewRows.map(r => (dpBT && r.month < dpBT) ? DP_BIND  : NONBIND);
+  // Forward-rolling cumulative LP demand at each month — taken from lpScen
+  // which extends past the chart's view horizon, so the 12/24-mo windows
+  // don't truncate near the right edge.
+  const safety1yr = viewRows.map((r, i) => {
+    let sum = 0;
+    for (let j = i; j < Math.min(i + 12, lpScen.length); j++) sum += lpScen[j]?.demand || 0;
+    return sum;
+  });
+  const safety2yr = viewRows.map((r, i) => {
+    let sum = 0;
+    for (let j = i; j < Math.min(i + 24, lpScen.length); j++) sum += lpScen[j]?.demand || 0;
+    return sum;
+  });
+  destroyChart('cpool-chart-tiered');
+  charts['cpool-chart-tiered'] = new Chart(document.getElementById('cpool-chart-tiered'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: `${lpProd} Inventory`,  data: lpInvD,  backgroundColor: 'rgba(31,73,125,0.92)',  stack: 'tier', borderRadius: 0 },
+        { label: `${lpProd} Production`, data: lpProdD, backgroundColor: lpProdCol,               stack: 'tier', borderRadius: 0 },
+        { label: `${dpProd} Inventory`,  data: dpInvD,  backgroundColor: 'rgba(237,125,49,0.92)', stack: 'tier', borderRadius: 0 },
+        { label: `${dpProd} Production`, data: dpProdD, backgroundColor: dpProdCol,               stack: 'tier', borderRadius: 0 },
+        { label: 'Forecasted Demand',    data: demandD,   type: 'line', borderColor: '#f5cf41', borderWidth: 2.5, pointRadius: 0, fill: false },
+        { label: '1-yr Safety Stock',    data: safety1yr, type: 'line', borderColor: '#c83b1f', borderWidth: 2,   pointRadius: 0, fill: false },
+        { label: '2-yr Safety Stock',    data: safety2yr, type: 'line', borderColor: '#1a2b5e', borderWidth: 2,   pointRadius: 0, fill: false },
+      ],
+    },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'bottom', labels: { font: { size: 10 }, boxWidth: 12 } },
+        tooltip: { mode: 'index', intersect: false,
+          callbacks: { footer: (items) => {
+            // Surface the binding state for the month in the tooltip footer.
+            const i = items[0]?.dataIndex;
+            if (i == null || !viewRows[i]) return '';
+            const m = viewRows[i].month;
+            const lpB = lpBT && m < lpBT;
+            const dpB = dpBT && m < dpBT;
+            return (lpB || dpB) ? `Binding window: ${[lpB ? lpProd : null, dpB ? dpProd : null].filter(Boolean).join(' + ')}`
+                                : 'Non-binding';
+          }}
+        }
+      },
+      scales: {
+        x: { ticks: { maxTicksLimit: 18, font: { size: 10 } }, stacked: true },
+        y: { ticks: { font: { size: 10 } }, beginAtZero: true, stacked: true, title: { display: true, text: 'Units (vials)', font: { size: 10 } } }
+      }
+    }
+  });
+  // Update card title to reflect the active pair.
+  const tt = document.getElementById('cpool-tiered-title');
+  if (tt) tt.textContent = `${lpProd} & ${dpProd} — Inventory + Production with Safety Stock`;
+
   // ── Inventory chart ───────────────────────────────────────────────────
-  const labels   = viewRows.map(r => monthLabel(r.month));
   const bEI      = baseRows.slice(0, viewRows.length).map(r => r.ei);
   const sEI      = viewRows.map(r => r.ei);
 
