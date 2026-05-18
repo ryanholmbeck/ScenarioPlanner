@@ -8342,23 +8342,38 @@ function runCombinedPoolTab() {
     return sum;
   });
   destroyChart('cpool-chart-tiered');
+  // afterDatasetsDraw plugin: forcibly re-paints the three line overlays
+  // AFTER the rest of the chart finishes drawing. Chart.js's `order`
+  // property should already put low-order datasets last in the draw
+  // sequence, but stacked-bar geometries can still clip thin lines along
+  // the bar edges. This plugin replays each line dataset's controller
+  // draw call as a final pass, guaranteeing the demand + safety stock
+  // lines render on top of every bar fill.
+  const cpoolLinesOnTop = {
+    id: 'cpoolLinesOnTop',
+    afterDatasetsDraw(chart) {
+      const metas = chart.getSortedVisibleDatasetMetas();
+      for (const m of metas) {
+        if (m.type === 'line') m.controller.draw();
+      }
+    }
+  };
   charts['cpool-chart-tiered'] = new Chart(document.getElementById('cpool-chart-tiered'), {
     type: 'bar',
     data: {
       labels,
       datasets: [
-        // Chart.js draws HIGHER `order` first, so bars sit at order:10 (drawn
-        // behind) and lines at order:0 (drawn last → on top of the stack).
-        // Demand line stays off --gold because it collides with the DP
-        // Inventory fill; --cyan is the only palette tone that doesn't clash
-        // with any of the bar colors.
         { label: `${lpProd} Inventory`,  data: lpInvD,  backgroundColor: FDP_INV,  stack: 'tier', borderRadius: 0, order: 10 },
         { label: `${lpProd} Production`, data: lpProdD, backgroundColor: lpProdCol, stack: 'tier', borderRadius: 0, order: 10 },
         { label: `${dpProd} Inventory`,  data: dpInvD,  backgroundColor: DP_INV,   stack: 'tier', borderRadius: 0, order: 10 },
         { label: `${dpProd} Production`, data: dpProdD, backgroundColor: dpProdCol, stack: 'tier', borderRadius: 0, order: 10 },
-        { label: 'Forecasted Demand',    data: demandD,   type: 'line', borderColor: '#05C3DD', borderWidth: 3.5, pointRadius: 0, fill: false, order: 0 },
-        { label: '1-yr Safety Stock',    data: safety1yr, type: 'line', borderColor: '#F9413A', borderWidth: 3,   pointRadius: 0, fill: false, order: 0 },
-        { label: '2-yr Safety Stock',    data: safety2yr, type: 'line', borderColor: '#003B5C', borderWidth: 3,   pointRadius: 0, fill: false, order: 0 },
+        // Lines: bold strokes + small point markers so they stay legible
+        // against the saturated stacked bars. --cyan demand contrasts
+        // against navy/gold/purple bars; --red 1-yr and --navy 2-yr keep
+        // the deck's three-line semantic.
+        { label: 'Forecasted Demand',    data: demandD,   type: 'line', borderColor: '#05C3DD', backgroundColor: '#05C3DD', borderWidth: 4,   pointRadius: 2, pointBackgroundColor: '#05C3DD', fill: false, order: 0 },
+        { label: '1-yr Safety Stock',    data: safety1yr, type: 'line', borderColor: '#F9413A', backgroundColor: '#F9413A', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#F9413A', fill: false, order: 0 },
+        { label: '2-yr Safety Stock',    data: safety2yr, type: 'line', borderColor: '#003B5C', backgroundColor: '#003B5C', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#003B5C', fill: false, order: 0 },
       ],
     },
     options: { responsive: true, maintainAspectRatio: false,
@@ -8366,7 +8381,6 @@ function runCombinedPoolTab() {
         legend: { position: 'bottom', labels: { font: { size: 10 }, boxWidth: 12 } },
         tooltip: { mode: 'index', intersect: false,
           callbacks: { footer: (items) => {
-            // Surface the binding state for the month in the tooltip footer.
             const i = items[0]?.dataIndex;
             if (i == null || !viewRows[i]) return '';
             const m = viewRows[i].month;
@@ -8381,7 +8395,8 @@ function runCombinedPoolTab() {
         x: { ticks: { maxTicksLimit: 18, font: { size: 10 } }, stacked: true },
         y: { ticks: { font: { size: 10 } }, beginAtZero: true, stacked: true, title: { display: true, text: 'Units (vials)', font: { size: 10 } } }
       }
-    }
+    },
+    plugins: [cpoolLinesOnTop],
   });
   // Update card title to reflect the active pair.
   const tt = document.getElementById('cpool-tiered-title');
