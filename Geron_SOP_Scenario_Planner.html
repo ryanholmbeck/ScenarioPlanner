@@ -1170,7 +1170,7 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
         <div class="card-header">
           <div>
             <div class="card-title" id="cpool-tiered-title">FDP &amp; DP — Inventory + Production with Safety Stock</div>
-            <div class="card-subtitle">Stacked monthly: <b>FDP inventory</b> (dark blue) + <b>FDP production</b> (lavender = binding · green = non-binding) + <b>DP inventory</b> (orange) + <b>DP production</b> (purple = binding · green = non-binding). Lines: monthly demand (yellow), 1-yr rolling cumulative demand (red), 2-yr rolling cumulative demand (navy).</div>
+            <div class="card-subtitle">Stacked monthly: <b>FDP inventory</b> (navy) + <b>FDP production</b> (Geron-blue = binding · green = non-binding) + <b>DP inventory</b> (gold) + <b>DP production</b> (purple = binding · green = non-binding). Lines (foreground): monthly demand (gold), 1-yr rolling cumulative demand (red), 2-yr rolling cumulative demand (navy). Re-renders live on every scenario / supplier / sales-factor change.</div>
           </div>
         </div>
         <div class="chart-container" style="height:340px;">
@@ -8317,12 +8317,15 @@ function runCombinedPoolTab() {
   const lpProdD = viewRows.map(r => r.lpProd);
   const dpProdD = viewRows.map(r => r.dpProd);
   const demandD = viewRows.map(r => r.demand);
-  // Per-month production fill: purple = binding window, green = non-binding.
-  // Two distinct purples so FDP and DP production are still visually
-  // distinguishable inside the binding window.
-  const FDP_BIND   = 'rgba(155,121,209,0.92)';   // lavender (matches the deck)
-  const DP_BIND    = 'rgba(112,48,160,0.92)';    // deep purple (matches the deck)
-  const NONBIND    = 'rgba(82,168,82,0.92)';     // green
+  // Palette-aligned fills (CSS vars resolved at runtime). Production
+  // segments use Geron-blue / purple inside the binding window and green
+  // outside; the segment's tier (FDP vs DP) is identified by its stack
+  // position rather than its color, matching the deck layout.
+  const FDP_INV    = '#003B5C';   // --navy
+  const FDP_BIND   = '#005EB8';   // --navy-light (Geron blue)
+  const DP_INV     = '#FFA300';   // --gold
+  const DP_BIND    = '#8F1A95';   // --purple
+  const NONBIND    = '#1a7a40';   // --green
   const lpProdCol  = viewRows.map(r => (lpBT && r.month < lpBT) ? FDP_BIND : NONBIND);
   const dpProdCol  = viewRows.map(r => (dpBT && r.month < dpBT) ? DP_BIND  : NONBIND);
   // Forward-rolling cumulative LP demand at each month — taken from lpScen
@@ -8344,13 +8347,17 @@ function runCombinedPoolTab() {
     data: {
       labels,
       datasets: [
-        { label: `${lpProd} Inventory`,  data: lpInvD,  backgroundColor: 'rgba(31,73,125,0.92)',  stack: 'tier', borderRadius: 0 },
-        { label: `${lpProd} Production`, data: lpProdD, backgroundColor: lpProdCol,               stack: 'tier', borderRadius: 0 },
-        { label: `${dpProd} Inventory`,  data: dpInvD,  backgroundColor: 'rgba(237,125,49,0.92)', stack: 'tier', borderRadius: 0 },
-        { label: `${dpProd} Production`, data: dpProdD, backgroundColor: dpProdCol,               stack: 'tier', borderRadius: 0 },
-        { label: 'Forecasted Demand',    data: demandD,   type: 'line', borderColor: '#f5cf41', borderWidth: 2.5, pointRadius: 0, fill: false },
-        { label: '1-yr Safety Stock',    data: safety1yr, type: 'line', borderColor: '#c83b1f', borderWidth: 2,   pointRadius: 0, fill: false },
-        { label: '2-yr Safety Stock',    data: safety2yr, type: 'line', borderColor: '#1a2b5e', borderWidth: 2,   pointRadius: 0, fill: false },
+        // Bars: order=0 draws first → behind the lines.
+        { label: `${lpProd} Inventory`,  data: lpInvD,  backgroundColor: FDP_INV,  stack: 'tier', borderRadius: 0, order: 0 },
+        { label: `${lpProd} Production`, data: lpProdD, backgroundColor: lpProdCol, stack: 'tier', borderRadius: 0, order: 0 },
+        { label: `${dpProd} Inventory`,  data: dpInvD,  backgroundColor: DP_INV,   stack: 'tier', borderRadius: 0, order: 0 },
+        { label: `${dpProd} Production`, data: dpProdD, backgroundColor: dpProdCol, stack: 'tier', borderRadius: 0, order: 0 },
+        // Lines: order=5 draws last → renders on top of the stack. Wider
+        // strokes and darker palette tones so they stay legible against
+        // the saturated bar fills.
+        { label: 'Forecasted Demand',    data: demandD,   type: 'line', borderColor: '#FFA300', borderWidth: 3, pointRadius: 0, fill: false, order: 5 },
+        { label: '1-yr Safety Stock',    data: safety1yr, type: 'line', borderColor: '#F9413A', borderWidth: 3, pointRadius: 0, fill: false, order: 5 },
+        { label: '2-yr Safety Stock',    data: safety2yr, type: 'line', borderColor: '#003B5C', borderWidth: 3, pointRadius: 0, fill: false, order: 5 },
       ],
     },
     options: { responsive: true, maintainAspectRatio: false,
