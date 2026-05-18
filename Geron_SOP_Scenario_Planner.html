@@ -1184,7 +1184,7 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
         <div class="card-header">
           <div>
             <div class="card-title" id="cpool-ds-title">Drug Substance — Inventory + Production with Safety Stock</div>
-            <div class="card-subtitle">Stacked monthly: <b>DS inventory</b> (navy) + <b>DS production</b> (Geron-blue = binding · green = non-binding). Lines (foreground): monthly DS demand (cyan) and rolling 1-yr / 2-yr cumulative DS demand (red / navy). DS demand is derived from the chosen DP product's production schedule via the dependency factor, so it inherits the lumpy by-batch profile (the deck calls this out — DS demand is per-DP-batch, not smooth like patient demand). Binding window = 18 months from today.</div>
+            <div class="card-subtitle">Stacked monthly: <b>DS inventory</b> (gold) + <b>DS production</b> (purple = binding · green = non-binding). Lines (foreground): monthly DS demand (cyan) and rolling 1-yr / 2-yr cumulative DS demand (red / navy). DS demand is derived from the chosen DP product's production schedule via the dependency factor, so it inherits the lumpy by-batch profile (the deck calls this out — DS demand is per-DP-batch, not smooth like patient demand). Binding window = 18 months from today.</div>
           </div>
         </div>
         <div class="chart-container" style="height:300px;">
@@ -8449,8 +8449,14 @@ function runCombinedPoolTab() {
     const _today = new Date();
     const _ds18  = new Date(Date.UTC(_today.getUTCFullYear(), _today.getUTCMonth() + 18, 1))
                      .toISOString().slice(0, 10);
-    const DS_INV_C  = '#003B5C';   // --navy
-    const DS_BIND_C = '#005EB8';   // --navy-light (Geron blue)
+    // Palette-aligned and chosen so nothing here collides with any of the
+    // three line overlays (cyan / red / navy). DS inventory uses --gold so
+    // the bar reads as a distinct "stored kg" tone; binding production uses
+    // --purple to match the deck's binding-window cue without looking like
+    // any blue on the chart; non-binding production reuses the green from
+    // the LP+DP card so the binding cue is consistent across the two charts.
+    const DS_INV_C  = '#FFA300';   // --gold
+    const DS_BIND_C = '#8F1A95';   // --purple
     const dsProdColors = viewRows.map(r => (r.month < _ds18) ? DS_BIND_C : NONBIND);
 
     // Rolling 12 / 24-month forward DS demand sums. DS demand only exists
