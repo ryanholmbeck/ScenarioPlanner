@@ -1170,7 +1170,7 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
         <div class="card-header">
           <div>
             <div class="card-title" id="cpool-tiered-title">FDP &amp; DP — Inventory + Production with Safety Stock</div>
-            <div class="card-subtitle">Stacked monthly: <b>FDP inventory</b> (navy) + <b>FDP production</b> (Geron-blue = binding · green = non-binding) + <b>DP inventory</b> (gold) + <b>DP production</b> (purple = binding · green = non-binding). Lines (foreground): monthly demand (cyan), 1-yr rolling cumulative demand (red), 2-yr rolling cumulative demand (navy). Re-renders live on every scenario / supplier / sales-factor change.</div>
+            <div class="card-subtitle">Stacked monthly: <b>FDP inventory</b> (navy) + <b>FDP production</b> (Geron-blue = binding · green = non-binding) + <b>DP inventory</b> (gold) + <b>DP production</b> (purple = binding · green = non-binding). Lines (foreground): monthly demand (cyan), 6-mo rolling cumulative demand (red), 1-yr rolling cumulative demand (navy). Re-renders live on every scenario / supplier / sales-factor change.</div>
           </div>
         </div>
         <div class="chart-container" style="height:340px;">
@@ -1184,7 +1184,7 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
         <div class="card-header">
           <div>
             <div class="card-title" id="cpool-ds-title">Drug Substance — Inventory + Production with Safety Stock</div>
-            <div class="card-subtitle">Stacked monthly: <b>DS inventory</b> (gold) + <b>DS production</b> (purple = binding · green = non-binding). Lines (foreground): monthly DS demand (cyan) and rolling 1-yr / 2-yr cumulative DS demand (red / navy). DS demand is derived from the chosen DP product's production schedule via the dependency factor, so it inherits the lumpy by-batch profile (the deck calls this out — DS demand is per-DP-batch, not smooth like patient demand). Binding window = 18 months from today.</div>
+            <div class="card-subtitle">Stacked monthly: <b>DS inventory</b> (gold) + <b>DS production</b> (purple = binding · green = non-binding). Lines (foreground): monthly DS demand (cyan) and rolling 6-mo / 1-yr cumulative DS demand (red / navy). DS demand is derived from the chosen DP product's production schedule via the dependency factor, so it inherits the lumpy by-batch profile (the deck calls this out — DS demand is per-DP-batch, not smooth like patient demand). Binding window = 18 months from today.</div>
           </div>
         </div>
         <div class="chart-container" style="height:300px;">
@@ -8343,16 +8343,16 @@ function runCombinedPoolTab() {
   const lpProdCol  = viewRows.map(r => (lpBT && r.month < lpBT) ? FDP_BIND : NONBIND);
   const dpProdCol  = viewRows.map(r => (dpBT && r.month < dpBT) ? DP_BIND  : NONBIND);
   // Forward-rolling cumulative LP demand at each month — taken from lpScen
-  // which extends past the chart's view horizon, so the 12/24-mo windows
+  // which extends past the chart's view horizon, so the 6 / 12-mo windows
   // don't truncate near the right edge.
+  const safety6mo = viewRows.map((r, i) => {
+    let sum = 0;
+    for (let j = i; j < Math.min(i + 6, lpScen.length); j++) sum += lpScen[j]?.demand || 0;
+    return sum;
+  });
   const safety1yr = viewRows.map((r, i) => {
     let sum = 0;
     for (let j = i; j < Math.min(i + 12, lpScen.length); j++) sum += lpScen[j]?.demand || 0;
-    return sum;
-  });
-  const safety2yr = viewRows.map((r, i) => {
-    let sum = 0;
-    for (let j = i; j < Math.min(i + 24, lpScen.length); j++) sum += lpScen[j]?.demand || 0;
     return sum;
   });
   destroyChart('cpool-chart-tiered');
@@ -8386,8 +8386,8 @@ function runCombinedPoolTab() {
         // against navy/gold/purple bars; --red 1-yr and --navy 2-yr keep
         // the deck's three-line semantic.
         { label: 'Forecasted Demand',    data: demandD,   type: 'line', borderColor: '#05C3DD', backgroundColor: '#05C3DD', borderWidth: 4,   pointRadius: 2, pointBackgroundColor: '#05C3DD', fill: false, order: 0 },
-        { label: '1-yr Safety Stock',    data: safety1yr, type: 'line', borderColor: '#F9413A', backgroundColor: '#F9413A', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#F9413A', fill: false, order: 0 },
-        { label: '2-yr Safety Stock',    data: safety2yr, type: 'line', borderColor: '#003B5C', backgroundColor: '#003B5C', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#003B5C', fill: false, order: 0 },
+        { label: '6-mo Safety Stock',    data: safety6mo, type: 'line', borderColor: '#F9413A', backgroundColor: '#F9413A', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#F9413A', fill: false, order: 0 },
+        { label: '1-yr Safety Stock',    data: safety1yr, type: 'line', borderColor: '#003B5C', backgroundColor: '#003B5C', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#003B5C', fill: false, order: 0 },
       ],
     },
     options: { responsive: true, maintainAspectRatio: false,
@@ -8462,14 +8462,14 @@ function runCombinedPoolTab() {
     // Rolling 12 / 24-month forward DS demand sums. DS demand only exists
     // for the months where DP production fired, so the safety lines will
     // dip toward the right edge — flagged in the card subtitle.
+    const dsSafety6mo = viewRows.map((r, i) => {
+      let sum = 0;
+      for (let j = i; j < Math.min(i + 6, viewRows.length); j++) sum += dsDemD[j] || 0;
+      return sum;
+    });
     const dsSafety1yr = viewRows.map((r, i) => {
       let sum = 0;
       for (let j = i; j < Math.min(i + 12, viewRows.length); j++) sum += dsDemD[j] || 0;
-      return sum;
-    });
-    const dsSafety2yr = viewRows.map((r, i) => {
-      let sum = 0;
-      for (let j = i; j < Math.min(i + 24, viewRows.length); j++) sum += dsDemD[j] || 0;
       return sum;
     });
 
@@ -8493,8 +8493,8 @@ function runCombinedPoolTab() {
           { label: 'DS Inventory',  data: dsInvD,  backgroundColor: DS_INV_C, stack: 'ds', borderRadius: 0, order: 10 },
           { label: 'DS Production', data: dsProdD, backgroundColor: dsProdColors, stack: 'ds', borderRadius: 0, order: 10 },
           { label: 'DS Demand',           data: dsDemD,     type: 'line', borderColor: '#05C3DD', backgroundColor: '#05C3DD', borderWidth: 4,   pointRadius: 2, pointBackgroundColor: '#05C3DD', fill: false, order: 0 },
-          { label: '1-yr Safety Stock',   data: dsSafety1yr, type: 'line', borderColor: '#F9413A', backgroundColor: '#F9413A', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#F9413A', fill: false, order: 0 },
-          { label: '2-yr Safety Stock',   data: dsSafety2yr, type: 'line', borderColor: '#003B5C', backgroundColor: '#003B5C', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#003B5C', fill: false, order: 0 },
+          { label: '6-mo Safety Stock',   data: dsSafety6mo, type: 'line', borderColor: '#F9413A', backgroundColor: '#F9413A', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#F9413A', fill: false, order: 0 },
+          { label: '1-yr Safety Stock',   data: dsSafety1yr, type: 'line', borderColor: '#003B5C', backgroundColor: '#003B5C', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#003B5C', fill: false, order: 0 },
         ],
       },
       options: { responsive: true, maintainAspectRatio: false,
