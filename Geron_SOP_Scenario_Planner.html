@@ -1830,7 +1830,14 @@ function applyDPLeadTimeOffset(rows, lpProduct) {
   for (const lpr of lpRows) {
     const prod = lpr.prod || 0;
     if (prod <= 0) continue;
-    const sup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(lpProduct, lpr.month) : null;
+    // Per-row supplier (set on the Production Schedule Override table)
+    // overrides the registry's primary so the named vendor's LTs drive
+    // the backshift — important when a one-off batch is routed to a
+    // non-primary supplier (e.g. Mar 2028 200mg DP via Simtra even
+    // though Patheon PDS-2 is the primary for that window).
+    const named   = lpr.supplier ? _supplierRegistryRow(lpProduct, lpr.supplier) : null;
+    const namedEff= named ? _effectiveSupplierRow(lpProduct, named) : null;
+    const sup     = namedEff || ((typeof getActiveSupplier === 'function') ? getActiveSupplier(lpProduct, lpr.month) : null);
     const mfgLT  = Math.round((sup && sup.lead_time     != null) ? sup.lead_time     : (lpMeta.lead_time     || 5));
     const allocLT= Math.round((sup && sup.allocation_lt != null) ? sup.allocation_lt : (lpMeta.allocation_lt || 0));
     const shift  = mfgLT + allocLT;
@@ -1952,8 +1959,16 @@ function deriveChildDemand(parentProduct, parentSchedRows, childProduct) {
   for (const pr of parentSchedRows) {
     const prod = pr.prod || 0;
     if (prod <= 0) continue;
-    const supRow = getActiveSupplier(parentProduct, pr.month);
-    const sup = pr.supplier || supRow?.supplier;
+    // Per-row supplier identity wins over the registry's primary pick.
+    // PROD_DATA rows carry .supplier, and the Production Schedule Override
+    // table lets the user route a row to any registered supplier — when
+    // it's set, look that supplier up directly so its Mfg LT / Alloc LT
+    // drive the cascade backshift (instead of the registry's primary,
+    // which may be a different vendor for that month).
+    const named   = pr.supplier ? _supplierRegistryRow(parentProduct, pr.supplier) : null;
+    const namedEff= named ? _effectiveSupplierRow(parentProduct, named) : null;
+    const supRow  = namedEff || getActiveSupplier(parentProduct, pr.month);
+    const sup     = pr.supplier || (supRow && supRow.supplier);
     const mfgLT   = Math.round(pr.leadTime != null ? pr.leadTime
                               : (supRow?.lead_time != null ? supRow.lead_time : 3));
     const allocLT = Math.round(pr.allocationLT != null ? pr.allocationLT
@@ -2081,6 +2096,33 @@ function setAllocationOverride(product, month, childMonth) {
 }
 function getAllocationOverride(product, month) {
   return (allocationOverrides[product] && allocationOverrides[product][month]) || null;
+}
+
+// ── PER-ROW SUPPLIER ROUTING ────────────────────────────────────────────────
+// PROD_DATA rows carry a `supplier` field (workbook-exported from the
+// active routing at refresh time). The Production Schedule Override
+// table now surfaces it as an editable dropdown so a single batch can
+// be routed to any supplier registered for the product — not just the
+// registry's time-windowed primary. The cascade (deriveChildDemand,
+// applyDPLeadTimeOffset) and the capacity-flag tally read this field
+// when set, so the chosen supplier's Mfg LT / Alloc LT and caps apply
+// without needing a separate alloc-date override.
+//
+// If the target product has no PROD_DATA row for the month yet (e.g.
+// an override-only month added via "+ Add batch"), we synthesize a
+// minimal row so the routing persists through the next runScenario.
+function setRowSupplier(product, month, supplier) {
+  if (typeof PROD_DATA !== 'object' || !Array.isArray(PROD_DATA)) return;
+  let row = PROD_DATA.find(r => r.product === product && r.month === month);
+  if (!row) {
+    row = { product, month, prod: 0, demand: 0, bi: 0, ei: 0, moh: 0, supplier: supplier || '' };
+    PROD_DATA.push(row);
+    PROD_DATA.sort((a,b) => (a.product||'').localeCompare(b.product||'') || (a.month||'').localeCompare(b.month||''));
+  } else {
+    row.supplier = supplier || '';
+  }
+  try { if (typeof _mdPersistAll === 'function') _mdPersistAll(); } catch (e) {}
+  if (typeof runScenario === 'function') runScenario();
 }
 
 // only counts as "overridden" if it's present; missing fields fall through to
@@ -2492,6 +2534,12 @@ function renderProdOverrideTable() {
   const fmtBS = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: qd, maximumFractionDigits: qd });
   // Quote-safe inline handler arg.
   const safe = s => String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  // Every supplier registered for this product — populates the per-row
+  // Supplier dropdown so the user can route a single batch to any
+  // registered vendor, not just the registry's time-windowed primary.
+  const supplierNames = (typeof _srRowsFor === 'function')
+    ? Array.from(new Set((_srRowsFor(product) || []).map(s => s.supplier).filter(Boolean)))
+    : [];
 
   tbody.innerHTML = showRows.map(r => {
     const isBinding = bindingThrough && r.month < bindingThrough;
@@ -2499,9 +2547,17 @@ function renderProdOverrideTable() {
     const hasOverride = ovBatches !== null;
     // Supplier + batch size come straight from the registry's active window
     // for the month. There is one supplier per month.
+    // Effective supplier for the row: the PROD_DATA row's .supplier wins
+    // over the registry's primary if set. That's how the user routes a
+    // single batch to a non-primary supplier — see setRowSupplier.
     const regSup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(product, r.month) : null;
-    const supName = regSup ? regSup.supplier : (meta.supplier || '—');
-    const bs      = (regSup && regSup.batch_size) || meta.batch_size || 1;
+    const regName = regSup ? regSup.supplier : '';
+    const namedReg = (r.supplier && _supplierRegistryRow(product, r.supplier)) || null;
+    const namedEff = namedReg ? _effectiveSupplierRow(product, namedReg) : null;
+    const effSup  = namedEff || regSup;
+    const supName = (r.supplier && namedEff) ? r.supplier : (regSup ? regSup.supplier : (meta.supplier || '—'));
+    const bs      = (effSup && effSup.batch_size) || meta.batch_size || 1;
+    const isRouted = !!(r.supplier && namedEff && r.supplier !== regName);
 
     const baseBatches = bs > 0 ? Math.round(r.prod / bs) : 0;
     const scenBatches = hasOverride ? ovBatches : baseBatches;
@@ -2540,9 +2596,26 @@ function renderProdOverrideTable() {
           style="margin-left:3px;font-size:10px;padding:1px 5px;background:transparent;border:1px solid var(--muted);border-radius:3px;color:var(--muted);cursor:pointer;">↺</button>` : ''}
       </td>`;
 
+    // Supplier dropdown — options are every supplier registered for this
+    // product, current value comes from PROD_DATA[row].supplier (the
+    // user's routing) or the registry's primary if unset. Selecting a
+    // different supplier triggers setRowSupplier, which patches the
+    // PROD_DATA row, persists via _mdPersistAll, and re-runs the cascade
+    // so the named supplier's Mfg LT + Alloc LT take over.
+    const _supOptions = supplierNames.length
+      ? supplierNames.map(n => `<option value="${n}" ${n === supName ? 'selected' : ''}>${n}${n === regName ? ' (registry)' : ''}</option>`).join('')
+      : `<option value="${safe(supName)}" selected>${supName}</option>`;
+    const _supStyle = isRouted
+      ? 'border:1px solid var(--gold);background:#fffbeb;font-weight:700;color:var(--navy);'
+      : 'color:var(--muted);background:transparent;border:1px solid var(--border);';
+    const _supCell = `<td><select
+        onchange="setRowSupplier('${safe(product)}','${r.month}', this.value)"
+        title="${isRouted ? 'Routed override — registry primary for this month is ' + regName : 'Registry primary for this month'}. Drives the Mfg LT / Alloc LT the cascade uses to schedule child-tier demand."
+        style="font-size:11px;padding:1px 3px;border-radius:3px;${_supStyle}">${_supOptions}</select></td>`;
+
     return `<tr style="${rowBg}">
       <td style="white-space:nowrap;">${monthLabel(r.month)}</td>
-      <td style="font-size:11px;color:var(--muted);">${supName}</td>
+      ${_supCell}
       <td style="text-align:right;font-size:11px;color:var(--muted);">${fmtBS(bs)}</td>
       <td>${statusLabel}</td>
       <td style="text-align:right;">${baseBatches}</td>
@@ -3944,7 +4017,18 @@ function _renderCapacityFlags(product, scenRows, meta) {
   // since there is one supplier per month; no per-batch supplier override.
   const perSup = {};   // name -> { sup, monthly:{m:b}, yearly:{y:b} }
   for (const r of scenRows) {
-    const sup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(product, r.month) : null;
+    // Per-row named supplier (PROD_DATA[row].supplier — editable on the
+    // override table) wins over the registry's primary for that month.
+    // So a row routed to Simtra counts against Simtra's caps even if
+    // Patheon PDS-2 is the registry's primary for that window.
+    const baseRow = (typeof PROD_DATA !== 'undefined')
+      ? PROD_DATA.find(p => p.product === product && p.month === r.month) : null;
+    let sup = null;
+    if (baseRow && baseRow.supplier) {
+      const reg = _supplierRegistryRow(product, baseRow.supplier);
+      if (reg) sup = _effectiveSupplierRow(product, reg);
+    }
+    if (!sup) sup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(product, r.month) : null;
     if (!sup || !sup.supplier) continue;
     const name    = sup.supplier;
     const bs      = sup.batch_size || (meta && meta.batch_size) || 1;
