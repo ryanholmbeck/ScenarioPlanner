@@ -885,6 +885,15 @@ Month inventory becomes available after lead time">Release Month</th>
           <canvas id="chart-streams"></canvas>
         </div>
       </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title" id="title-demand-mix">Demand Mix — Region × Indication</div>
+          <div class="card-subtitle">Stacked monthly demand split by (region, indication) pair for the spotlight product. Aggregation follows the sidebar period control.</div>
+        </div>
+        <div class="chart-container" style="height:240px;">
+          <canvas id="chart-demand-mix"></canvas>
+        </div>
+      </div>
     </div>
 
 
@@ -3995,6 +4004,78 @@ function updateDemandTab(product, baseRows, scenRows, salesFactor) {
     ctx.fillText('No per-indication / per-region demand streams for this product.', cx, cy - 8);
     ctx.font = '11px sans-serif';
     ctx.fillText('Demand is derived from the downstream cascade — see the Demand chart above for the live derived total.', cx, cy + 10);
+  }
+
+  // ── Demand Mix stacked-bar (Region × Indication for the spotlight) ────
+  // Each segment is one (region, indication) pair, so a stacked bar shows
+  // the contribution of e.g. "US LR-MDS" + "US MF" + "EU LR-MDS" + "EU MF"
+  // + "JP LR-MDS" to the month's total. Uses the same period aggregation
+  // as the demand chart above so a monthly / quarterly / annual change
+  // reshapes both consistently.
+  const mixTitleEl = document.getElementById('title-demand-mix');
+  if (mixTitleEl) mixTitleEl.textContent = `${product} — Demand Mix by Region × Indication`;
+  destroyChart('chart-demand-mix');
+  if (streamData.length) {
+    // Parse each stream key "REGION INDICATION (PRODUCT)" into its parts
+    // so we can label segments cleanly and reuse the palette consistently
+    // across renders.
+    const parsed = streamData.map(([key, rows]) => {
+      const m = key.match(/^([A-Z]{2,3})\s+(.+?)\s+\(/);
+      const region     = m ? m[1] : '?';
+      const indication = m ? m[2] : key;
+      return { key, region, indication, rows };
+    });
+    // Palette — paired by (region, indication). Geron palette tones with
+    // a couple of extras so we don't run out at 6+ streams.
+    const _palette = ['#003B5C','#FFA300','#05C3DD','#005EB8','#8F1A95','#F9413A','#1a7a40','#e67e22','#2980b9','#8e44ad','#16a085','#c0392b'];
+    const mixDatasets = parsed.map((p, idx) => {
+      const vals = p.rows.slice(0, viewLen).map(r => r.d * sf);
+      const agg  = aggregateSeries(streamMonths, vals);
+      return {
+        label: `${p.region} · ${p.indication}`,
+        data: agg.series[0],
+        backgroundColor: _palette[idx % _palette.length],
+        stack: 'mix',
+        borderRadius: 0,
+      };
+    });
+    charts['chart-demand-mix'] = new Chart(
+      document.getElementById('chart-demand-mix'),
+      {
+        type: 'bar',
+        data: { labels: streamAggLabels, datasets: mixDatasets },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { position: 'bottom', labels: { font: { size: 10 }, boxWidth: 12 } },
+            tooltip: { mode: 'index', intersect: false,
+              callbacks: { footer: items => {
+                const total = items.reduce((s, it) => s + (it.parsed?.y || 0), 0);
+                return `Total: ${fmt(Math.round(total))}`;
+              }}
+            }
+          },
+          scales: {
+            x: { ticks: { maxTicksLimit: 18, font: { size: 10 } }, stacked: true },
+            y: { ticks: { font: { size: 10 } }, beginAtZero: true, stacked: true,
+                 title: { display: true, text: (getMeta(product)?.unit) || 'units', font: { size: 10 } } }
+          }
+        }
+      }
+    );
+  } else {
+    // Empty state — cascade products (DS, raw materials) have no streams.
+    const ctx2 = document.getElementById('chart-demand-mix')?.getContext('2d');
+    if (ctx2) {
+      ctx2.clearRect(0, 0, ctx2.canvas.width, ctx2.canvas.height);
+      ctx2.font = '12px sans-serif';
+      ctx2.fillStyle = '#5a7a8a';
+      ctx2.textAlign = 'center';
+      const cy2 = ctx2.canvas.height / 2;
+      const cx2 = ctx2.canvas.width / 2;
+      ctx2.fillText(`No region/indication streams for ${product}.`, cx2, cy2 - 4);
+      ctx2.font = '11px sans-serif';
+      ctx2.fillText('Demand for cascade products (DS, raw materials) is derived from the LP/DP schedule — not stream-keyed.', cx2, cy2 + 12);
+    }
   }
 }
 
