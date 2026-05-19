@@ -801,9 +801,9 @@
                 <th title="Active supplier's batch size for this month.">Batch Size</th>
                 <th>Status</th>
                 <th style="text-align:right;">Base Batches</th>
-                <th style="text-align:right;">Base Units</th>
+                <th style="text-align:right;" id="prod-ov-th-base-units">Base Units</th>
                 <th style="text-align:center;min-width:90px;">Scen Batches</th>
-                <th style="text-align:right;">Δ Units</th>
+                <th style="text-align:right;" id="prod-ov-th-delta-units">Δ Units</th>
                 <th style="text-align:center;">Actions</th>
               </tr>
             </thead>
@@ -849,14 +849,14 @@ Based on scenario MOH vs target and critical thresholds">Risk</th>
               <tr>
                 <th data-tip="Calendar month for this row">Month</th>
                 <th data-tip="Base: number of full batches scheduled
-From the current production plan">Base Prod (batches)</th><th data-tip="Base: units produced
+From the current production plan">Base Prod (batches)</th><th id="prod-tbl-th-base-units" data-tip="Base: units produced
 Batches × batch size (baseline)">Base Prod (units)</th>
                 <th data-tip="Scenario: number of batches
-MRP-calculated for this scenario demand level">Scen Prod (batches)</th><th data-tip="Scenario: units produced
+MRP-calculated for this scenario demand level">Scen Prod (batches)</th><th id="prod-tbl-th-scen-units" data-tip="Scenario: units produced
 Batches × batch size (scenario)">Scen Prod (units)</th>
                 <th id="companion-prod-col-h" style="display:none;" data-tip="Companion product production (combine mode only)">Companion Prod</th>
                 <th data-tip="Batch delta
-Scenario batches minus Base batches">Δ Batches</th><th data-tip="Unit delta
+Scenario batches minus Base batches">Δ Batches</th><th id="prod-tbl-th-delta-units" data-tip="Unit delta
 Scenario units minus Base units">Δ Units</th><th data-tip="Release Month
 Month inventory becomes available after lead time">Release Month</th>
               </tr>
@@ -909,6 +909,14 @@ Month inventory becomes available after lead time">Release Month</th>
 
     <!-- TAB: RAW MATERIAL CASCADE -->
     <div id="tab-rawmat" class="tab-content">
+
+      <!-- Spotlight-context banner — surfaces when the user lands here
+           with a non-LP spotlight. This tab is always LP-rooted (BOM
+           waterfall and batch-start Gantt anchor on LP delivery dates),
+           so we tell the user explicitly rather than re-rooting the whole
+           cascade on the spotlight tier (a bigger refactor). -->
+      <div id="rm-spotlight-banner"
+           style="display:none;margin-bottom:10px;padding:8px 12px;border-left:3px solid var(--gold);background:rgba(255,163,0,0.08);font-size:11px;color:var(--navy);border-radius:4px;"></div>
 
       <!-- SECTION 1: BOM Waterfall -->
       <div class="card">
@@ -1160,6 +1168,14 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
         </div>
       </div>
 
+      <!-- Spotlight-context banner — surfaces only when the sidebar's
+           spotlight product is something other than an LP/DP product
+           (e.g. DS or a raw material). Combined Pool is pair-driven, not
+           spotlight-driven, so this is how the user gets a signal that
+           the spotlight setting doesn't reframe this tab. -->
+      <div id="cpool-spotlight-banner"
+           style="display:none;margin-bottom:10px;padding:8px 12px;border-left:3px solid var(--gold);background:rgba(255,163,0,0.08);font-size:11px;color:var(--navy);border-radius:4px;"></div>
+
       <!-- KPI row -->
       <div class="kpi-row" id="cpool-kpi-row" style="margin-bottom:10px;"></div>
 
@@ -1361,6 +1377,17 @@ function fmt(n, dec=0) {
   if (n === null || n === undefined || isNaN(n)) return '—';
   return n.toLocaleString('en-US', {minimumFractionDigits:dec, maximumFractionDigits:dec});
 }
+// Unit-aware quantity formatter. Uses 1 decimal for products measured in
+// kg (Drug Substance, raw materials) and 0 for vials/units (LP, DP). Pass
+// the spotlight meta or any RAW[product] record.
+function fmtQty(n, meta) {
+  const dec = (meta && meta.unit === 'kg') ? 1 : 0;
+  return fmt(n, dec);
+}
+// Returns the right qty-decimal count for the given meta — useful when
+// callers need to plug the value into a `meta.unit`-conditional template
+// rather than format a single number.
+function qtyDec(meta) { return (meta && meta.unit === 'kg') ? 1 : 0; }
 function fmtDollar(n) {
   if (!n || isNaN(n)) return '—';
   if (Math.abs(n) >= 1e6) return '$' + (n/1e6).toFixed(1) + 'M';
@@ -2259,6 +2286,11 @@ function isProdCancelled(product, monthIso) {
 function setProdOverride(product, month, batches) {
   if (!prodOverrides[product]) prodOverrides[product] = {};
   prodOverrides[product][month] = batches;
+  // Persist immediately so the scenario edit survives a reload. Master
+  // Data setters auto-persist via _mdUpdateStatus, but production
+  // overrides are written from the Production tab outside that path,
+  // so they need their own save call.
+  try { localStorage.setItem('geron_prod_overrides', JSON.stringify(prodOverrides)); } catch (e) {}
   updateOverrideBadge();
   runScenario();
 }
@@ -2291,14 +2323,18 @@ function _refreshProdAddSupplier() {
   const bsEl       = document.getElementById('prod-add-batchsize');
   if (!product || !supEl || !bsEl) return;
   const monthIso = monthInput ? (monthInput + '-01') : new Date().toISOString().slice(0,10);
-  const sup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(product, monthIso) : null;
+  const sup  = (typeof getActiveSupplier === 'function') ? getActiveSupplier(product, monthIso) : null;
+  const meta = (typeof getMeta === 'function') ? getMeta(product) : {};
+  // Preserve 1 decimal for kg-based products (DS = 4.3 kg) — the default
+  // toLocaleString() truncates to integer and silently shows "4".
+  const _qd = (meta && meta.unit === 'kg') ? 1 : 0;
+  const _fmtBS = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: _qd, maximumFractionDigits: _qd });
   if (sup) {
     supEl.value = sup.supplier || '';
-    bsEl.value  = sup.batch_size != null ? Number(sup.batch_size).toLocaleString() : '';
+    bsEl.value  = sup.batch_size != null ? _fmtBS(sup.batch_size) : '';
   } else {
-    const meta = (typeof getMeta === 'function') ? getMeta(product) : {};
     supEl.value = meta.supplier || '(none active)';
-    bsEl.value  = meta.batch_size != null ? Number(meta.batch_size).toLocaleString() : '';
+    bsEl.value  = meta.batch_size != null ? _fmtBS(meta.batch_size) : '';
   }
 }
 function addBatchFromProdForm() {
@@ -2329,7 +2365,10 @@ function addBatchFromProdForm() {
 }
 
 function clearProdOverrides() {
-  prodOverrides = {};
+  // Wipe the in-memory map AND the persisted snapshot — otherwise the
+  // cleared state would re-hydrate from localStorage on next load.
+  for (const k of Object.keys(prodOverrides)) delete prodOverrides[k];
+  try { localStorage.removeItem('geron_prod_overrides'); } catch (e) {}
   updateOverrideBadge();
   renderProdOverrideTable();
   runScenario();
@@ -2369,6 +2408,15 @@ function renderProdOverrideTable() {
     r.prod > 0 || overrideMap[r.month] !== undefined
   );
 
+  // Unit-aware label on the table header — DS shows "Base kg" / "Δ kg",
+  // LP/DP stay "Base Units" / "Δ Units".
+  const unitLabel = (meta && meta.unit) || 'units';
+  const unitCap   = unitLabel.charAt(0).toUpperCase() + unitLabel.slice(1);
+  const _thBU = document.getElementById('prod-ov-th-base-units');
+  if (_thBU) _thBU.textContent = `Base ${unitCap}`;
+  const _thDU = document.getElementById('prod-ov-th-delta-units');
+  if (_thDU) _thDU.textContent = `Δ ${unitCap}`;
+
   if (!showRows.length) {
     tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:12px;">No scheduled production for <strong>${product}</strong> in the view window.</td></tr>`;
     return;
@@ -2382,6 +2430,11 @@ function renderProdOverrideTable() {
     if (typeof raw === 'object' && typeof raw.batches === 'number') return raw.batches;
     return null;
   };
+
+  // Per-unit decimal precision for kg vs units. DS batch size = 4.3 kg,
+  // so we must show 1 decimal everywhere on this row.
+  const qd = (meta && meta.unit === 'kg') ? 1 : 0;
+  const fmtBS = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: qd, maximumFractionDigits: qd });
 
   tbody.innerHTML = showRows.map(r => {
     const isBinding = bindingThrough && r.month < bindingThrough;
@@ -2398,7 +2451,7 @@ function renderProdOverrideTable() {
     const baseUnits   = r.prod;
     const scenUnits   = scenBatches * bs;
     const deltaUnits  = scenUnits - baseUnits;
-    const deltaFmt    = deltaUnits === 0 ? '—' : (deltaUnits > 0 ? `+${Math.round(deltaUnits).toLocaleString()}` : Math.round(deltaUnits).toLocaleString());
+    const deltaFmt    = deltaUnits === 0 ? '—' : (deltaUnits > 0 ? `+${fmtBS(deltaUnits)}` : fmtBS(deltaUnits));
     const deltaColor  = deltaUnits < 0 ? '#e74c3c' : deltaUnits > 0 ? '#1a7a40' : 'var(--muted)';
 
     const rowBg = hasOverride
@@ -2412,10 +2465,10 @@ function renderProdOverrideTable() {
     return `<tr style="${rowBg}">
       <td style="white-space:nowrap;">${monthLabel(r.month)}</td>
       <td style="font-size:11px;color:var(--muted);">${supName}</td>
-      <td style="text-align:right;font-size:11px;color:var(--muted);">${Math.round(bs).toLocaleString()}</td>
+      <td style="text-align:right;font-size:11px;color:var(--muted);">${fmtBS(bs)}</td>
       <td>${statusLabel}</td>
       <td style="text-align:right;">${baseBatches}</td>
-      <td style="text-align:right;">${Math.round(baseUnits).toLocaleString()}</td>
+      <td style="text-align:right;">${fmtBS(baseUnits)}</td>
       <td style="text-align:center;">
         <div style="display:flex;align-items:center;justify-content:center;gap:4px;">
           <button onclick="adjProdOverride('${product}','${r.month}',${bs},-1)"
@@ -2460,6 +2513,7 @@ function resetProdOverride(product, month) {
     delete prodOverrides[product][month];
     if (!Object.keys(prodOverrides[product]).length) delete prodOverrides[product];
   }
+  try { localStorage.setItem('geron_prod_overrides', JSON.stringify(prodOverrides)); } catch (e) {}
   updateOverrideBadge();
   renderProdOverrideTable();
   runScenario();
@@ -3534,8 +3588,16 @@ function updateKPIs(product, baseRows, scenRows, salesFactor, meta) {
   const scenProdN    = sSlice.reduce((a,r) => a+r.prod, 0);
   const baseEI_last  = bSlice[bSlice.length-1]?.ei || 0;
   const scenEI_last  = sSlice[sSlice.length-1]?.ei || 0;
-  const baseMOH_avg  = bSlice.reduce((a,r) => a + Math.min(r.moh,999), 0) / bSlice.length;
-  const scenMOH_avg  = sSlice.reduce((a,r) => a + Math.min(r.moh,999), 0) / sSlice.length;
+  // Avg MOH — drop months where coverage hit the 999 cap (zero or near-
+  // zero demand). For bursty-demand products like Drug Substance (DS
+  // demand only fires when a DP batch fires), this otherwise dominates
+  // the average and reads "999.0 mo" even with realistic kg on hand.
+  function _meanFiniteMOH(rows) {
+    const xs = rows.filter(r => r.moh < 999).map(r => r.moh);
+    return xs.length ? xs.reduce((a,b) => a + b, 0) / xs.length : 0;
+  }
+  const baseMOH_avg = _meanFiniteMOH(bSlice);
+  const scenMOH_avg = _meanFiniteMOH(sSlice);
 
   // Spend over view window — uses correct batch vs UOM cost from Supplier Registry
   const baseBudgetN = bSlice.reduce((a,r) => a + computeProdCost(r.prod || 0, product), 0);
@@ -3663,9 +3725,9 @@ function updateInventoryTab(product, baseRows, scenRows, meta) {
     const rCls = `risk-${s.risk}`;
     tbody.innerHTML += `<tr>
       <td>${monthLabel(b.month)}</td>
-      <td>${fmt(b.bi)}</td><td>${fmt(b.demand)}</td><td>${fmt(b.prod)}</td><td>${fmt(b.ei)}</td><td>${fmt(b.moh,1)}</td>
-      <td>${fmt(s.bi)}</td><td>${fmt(s.demand)}</td><td>${fmt(s.prod)}</td><td>${fmt(s.ei)}</td><td>${fmt(s.moh,1)}</td>
-      <td class="${dEI>0?'diff-pos':dEI<0?'diff-neg':'diff-neu'}">${dEI>0?'+':''}${fmt(dEI)}</td>
+      <td>${fmtQty(b.bi,meta)}</td><td>${fmtQty(b.demand,meta)}</td><td>${fmtQty(b.prod,meta)}</td><td>${fmtQty(b.ei,meta)}</td><td>${fmt(b.moh,1)}</td>
+      <td>${fmtQty(s.bi,meta)}</td><td>${fmtQty(s.demand,meta)}</td><td>${fmtQty(s.prod,meta)}</td><td>${fmtQty(s.ei,meta)}</td><td>${fmt(s.moh,1)}</td>
+      <td class="${dEI>0?'diff-pos':dEI<0?'diff-neg':'diff-neu'}">${dEI>0?'+':''}${fmtQty(dEI,meta)}</td>
       <td class="${rCls}"><span class="status-pill status-${s.risk}">${s.risk}</span></td>
     </tr>`;
   }
@@ -3770,6 +3832,17 @@ function updateDemandTab(product, baseRows, scenRows, salesFactor) {
     destroyChart('chart-streams');
     const ctx = document.getElementById('chart-streams').getContext('2d');
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    // Cascade products (DS, raw materials) have no DEMAND_BY_STREAM rows —
+    // their demand is derived from the LP/DP scenario via the dependency
+    // graph. Surface that explicitly rather than leaving the card blank.
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = '#5a7a8a';
+    ctx.textAlign = 'center';
+    const cy = ctx.canvas.height / 2;
+    const cx = ctx.canvas.width / 2;
+    ctx.fillText('No per-indication / per-region demand streams for this product.', cx, cy - 8);
+    ctx.font = '11px sans-serif';
+    ctx.fillText('Demand is derived from the downstream cascade — see the Demand chart above for the live derived total.', cx, cy + 10);
   }
 }
 
@@ -3906,7 +3979,8 @@ function updateProductionTab(product, baseRows, scenRows, meta) {
             const units = ctx.raw || 0;
             const bs = meta.batch_size || 1;
             const batches = bs > 0 ? Math.round(units / bs) : 0;
-            return ctx.dataset.label + ': ' + fmt(units) + ' units (' + batches + (batches===1?' batch':' batches') + ')';
+            const u = (meta && meta.unit) || 'units';
+            return ctx.dataset.label + ': ' + fmtQty(units, meta) + ' ' + u + ' (' + batches + (batches===1?' batch':' batches') + ')';
           }}}
         },
         scales:{ x:{ ticks:{maxTicksLimit:18,font:{size:10}} }, y:{ ticks:{font:{size:10}}, beginAtZero:true } }
@@ -3915,8 +3989,20 @@ function updateProductionTab(product, baseRows, scenRows, meta) {
   );
 
   const bSize = meta.batch_size || 1;
+  const unit  = (meta && meta.unit) || 'units';
   const tbody = document.querySelector('#tbl-production tbody');
   tbody.innerHTML = '';
+
+  // Re-label the column headers with the spotlight product's unit so DS
+  // shows "(kg)" and LP/DP show "(units)". Headers also lose the hardcoded
+  // "Δ Units" → "Δ <unit>" for the same reason.
+  const _unitCap = unit.charAt(0).toUpperCase() + unit.slice(1);
+  const _thA = document.getElementById('prod-tbl-th-base-units');
+  if (_thA) _thA.textContent = `Base Prod (${unit})`;
+  const _thB = document.getElementById('prod-tbl-th-scen-units');
+  if (_thB) _thB.textContent = `Scen Prod (${unit})`;
+  const _thC = document.getElementById('prod-tbl-th-delta-units');
+  if (_thC) _thC.textContent = `Δ ${_unitCap}`;
 
   // Toggle companion column visibility
   const combineActive = window._combineActive || false;
@@ -3924,7 +4010,7 @@ function updateProductionTab(product, baseRows, scenRows, meta) {
   const companionLabel = window._companionProduct || '';
   const compColHeader = document.getElementById('companion-prod-col-h');
   if (compColHeader) {
-    compColHeader.textContent = combineActive ? companionLabel + ' Prod (units)' : 'Companion Prod (units)';
+    compColHeader.textContent = combineActive ? `${companionLabel} Prod (${unit})` : `Companion Prod (${unit})`;
     compColHeader.style.display = combineActive ? '' : 'none';
   }
   // Hide/show all cells in companion column
@@ -3938,18 +4024,18 @@ function updateProductionTab(product, baseRows, scenRows, meta) {
     const dU = s.prod - b.prod;
     const compProd = combineActive && compScenRowsLocal[i] ? (compScenRowsLocal[i].prod || 0) : null;
     const compCell = compProd !== null
-      ? `<td style="color:var(--muted);font-style:italic;">${compProd > 0 ? fmt(compProd) : '—'}</td>`
+      ? `<td style="color:var(--muted);font-style:italic;">${compProd > 0 ? fmtQty(compProd,meta) : '—'}</td>`
       : `<td style="display:none;"></td>`;
     const cancelBadge = s.cancelled
       ? ' <span style="font-size:9px;font-weight:700;background:#dc2626;color:#fff;border-radius:3px;padding:1px 5px;">CANCELLED</span>'
       : '';
     tbody.innerHTML += `<tr>
       <td>${monthLabel(b.month)}</td>
-      <td>${fmt(Math.round(b.prod/bSize))}</td><td>${fmt(b.prod)}</td>
-      <td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmt(Math.round(s.prod/bSize))}</td><td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmt(s.prod)}${cancelBadge}</td>
+      <td>${fmt(Math.round(b.prod/bSize))}</td><td>${fmtQty(b.prod,meta)}</td>
+      <td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmt(Math.round(s.prod/bSize))}</td><td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmtQty(s.prod,meta)}${cancelBadge}</td>
       ${compCell}
       <td class="${dB>0?'diff-pos':dB<0?'diff-neg':'diff-neu'}">${dB>0?'+':''}${dB}</td>
-      <td class="${dU>0?'diff-pos':dU<0?'diff-neg':'diff-neu'}">${dU>0?'+':''}${fmt(dU)}</td>
+      <td class="${dU>0?'diff-pos':dU<0?'diff-neg':'diff-neu'}">${dU>0?'+':''}${fmtQty(dU,meta)}</td>
       <td>${monthLabel(b.rm || b.month)}</td>
     </tr>`;
   }
@@ -4008,6 +4094,20 @@ function updateBudgetTab(product, baseRows, scenRows) {
 //  TAB: RAW MATERIAL CASCADE
 // ══════════════════════════════════════════════════════════════════════════════
 function updateRMTab(product, scenRows, salesFactor) {
+
+  // Spotlight-context banner — the cascade is LP-rooted (waterfall is
+  // "per LP batch", Gantt anchors on a target LP delivery date), so flag
+  // that to non-LP spotlights instead of pretending the page rerooted.
+  const _rmBanner = document.getElementById('rm-spotlight-banner');
+  if (_rmBanner) {
+    const _isLP = (product === '188mg LP' || product === '47mg LP');
+    if (!_isLP && product) {
+      _rmBanner.style.display = '';
+      _rmBanner.innerHTML = `<b>Heads up:</b> this tab is always rooted at LP (BOM waterfall is per LP batch; Batch Start Timeline counts back from a target LP delivery). Spotlight <b>${product}</b> appears as a tier in the cascade rather than the focal product — use the <b>Inventory &amp; Production</b> tab for an ${product}-rooted view.`;
+    } else {
+      _rmBanner.style.display = 'none';
+    }
+  }
 
   // ── Data setup ───────────────────────────────────────────────────────────
   const sf       = salesFactor / 100;
@@ -5286,7 +5386,10 @@ function onProductChange() {
                      ? getActiveSupplier(product, new Date().toISOString().slice(0,10))
                      : null;
     const bs = (todaySup && todaySup.batch_size) || meta.batch_size || '';
-    bsEl.value = bs ? Number(bs).toLocaleString() + (todaySup ? ' · ' + (todaySup.supplier || '') : '') : '';
+    // Preserve 1 decimal for kg products (DS = 4.3 kg) so the user sees
+    // the contract value, not a rounded "4".
+    const _qd = (meta && meta.unit === 'kg') ? 1 : 0;
+    bsEl.value = bs ? Number(bs).toLocaleString('en-US', { minimumFractionDigits: _qd, maximumFractionDigits: _qd }) + (todaySup ? ' · ' + (todaySup.supplier || '') : '') : '';
   }
 
   // Starting-BI override field: show current override or workbook default as placeholder
@@ -5927,6 +6030,14 @@ function checkDataMode() {
 //  INIT
 // ══════════════════════════════════════════════════════════════════════════════
 function init() {
+  // Restore any Master Data edits the user saved in a prior session
+  // BEFORE building the product dropdown — saved RAW edits might add or
+  // remove products. Falls through silently if localStorage is empty,
+  // unreadable, or carries corrupt JSON.
+  try {
+    if (typeof _mdLoadPersistedState === 'function') _mdLoadPersistedState();
+  } catch (e) { console.warn('Master Data persistence load failed:', e); }
+
   const products = Object.keys(RAW);
   if (products.length) {
     const sel = document.getElementById('sel-product');
@@ -6954,6 +7065,96 @@ function _mdCaptureBaselines() {
   _mdSnapshot('DEPENDENCIES_FULL', typeof DEPENDENCIES_FULL !== 'undefined' ? DEPENDENCIES_FULL : null);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+//  Master Data persistence
+// ──────────────────────────────────────────────────────────────────────────
+//  Every mdSet*() call mutates an in-memory global (RAW, COST_DATA, etc.)
+//  and triggers runScenario, but until now those edits died on page reload.
+//  This layer snapshots the live values back to localStorage so the next
+//  session boots from the user's last saved state. Persistence fires
+//  automatically on every setter via _mdPersistAll(); the explicit Save
+//  button on the modal just calls the same function with a toast for
+//  confirmation. "Reset to workbook" wipes the keys.
+// ══════════════════════════════════════════════════════════════════════════
+const _MD_KEYS = [
+  'PROD_DATA', 'PROD_INPUTS', 'DEMAND_BY_STREAM',
+  'RAW', 'COST_DATA', 'FEFO_LOTS',
+  'SUPPLIER_REGISTRY', 'DEPENDENCIES_FULL',
+];
+function _mdLSKey(name) { return 'geron_md_' + name; }
+
+function _mdPersistOne(name) {
+  try {
+    const v = window[name];
+    if (v === undefined || v === null) return;
+    localStorage.setItem(_mdLSKey(name), JSON.stringify(v));
+  } catch (e) { /* localStorage may be full or disabled — fail silent */ }
+}
+function _mdPersistAll() {
+  for (const k of _MD_KEYS) _mdPersistOne(k);
+  // Production-override layer also persists here so user-added scenario
+  // batches survive a reload. Other override layers already self-persist
+  // via their own _persist*() helpers.
+  try { localStorage.setItem('geron_prod_overrides', JSON.stringify(prodOverrides || {})); } catch (e) {}
+}
+// Load the persisted state back onto the live globals at boot. Called
+// from init() before runScenario() so the first render reflects the
+// saved values. Falls back silently to the workbook-baked defaults if
+// localStorage is empty or unreadable.
+function _mdLoadPersistedState() {
+  let loadedAny = false;
+  for (const k of _MD_KEYS) {
+    try {
+      const raw = localStorage.getItem(_mdLSKey(k));
+      if (raw == null) continue;
+      const parsed = JSON.parse(raw);
+      if (parsed && (typeof parsed === 'object')) {
+        window[k] = parsed;
+        loadedAny = true;
+      }
+    } catch (e) { /* corrupt entry — leave workbook default */ }
+  }
+  try {
+    const raw = localStorage.getItem('geron_prod_overrides');
+    if (raw != null) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        if (typeof prodOverrides === 'object') {
+          // Mutate in place — prodOverrides is referenced by closure in
+          // many spots; reassigning the binding loses those references.
+          for (const k of Object.keys(prodOverrides)) delete prodOverrides[k];
+          for (const k of Object.keys(parsed)) prodOverrides[k] = parsed[k];
+        }
+      }
+    }
+  } catch (e) {}
+  return loadedAny;
+}
+function _mdClearPersistedState() {
+  for (const k of _MD_KEYS) {
+    try { localStorage.removeItem(_mdLSKey(k)); } catch (e) {}
+  }
+  try { localStorage.removeItem('geron_prod_overrides'); } catch (e) {}
+}
+// User-facing Save button. Re-snapshots state and shows a toast.
+function mdSaveAll() {
+  _mdPersistAll();
+  if (typeof toast === 'function') {
+    toast('💾 Master Data saved — changes will load on next open.');
+  }
+  _mdUpdateStatus();
+}
+// Wipes the persisted master-data state and forces a hard reload so the
+// workbook defaults reassert themselves cleanly. Keeps the override
+// layers (lots / suppliers / deps / bi) untouched — those have their own
+// reset paths.
+function mdResetToWorkbook() {
+  if (!confirm('Discard ALL Master Data edits and reload the workbook defaults?\n\nThis clears every change to RAW / Costs / Production / Demand / Suppliers / Dependencies from this and previous sessions. Lot, supplier, dependency, and starting-BI overrides are kept (use their own reset links to clear those).')) return;
+  _mdClearPersistedState();
+  if (typeof toast === 'function') toast('↺ Master Data reset — reloading…');
+  setTimeout(() => { location.reload(); }, 600);
+}
+
 function openMasterDataModal() {
   const ov = document.getElementById('master-data-overlay');
   if (!ov) return;
@@ -7002,6 +7203,13 @@ function mdSwitchTab(name) {
 }
 
 function _mdUpdateStatus() {
+  // Auto-persist on every status refresh. Every mdSet*() ends with a
+  // _mdUpdateStatus() call, so piggybacking here gives us free
+  // persistence on every edit without scattering save calls through
+  // each setter. Idempotent and cheap (a handful of JSON.stringify
+  // calls into localStorage).
+  try { _mdPersistAll(); } catch (e) {}
+
   const status = document.getElementById('md-section-status');
   const footer = document.getElementById('md-footer-summary');
   if (!status || !footer) return;
@@ -8316,6 +8524,23 @@ function runCombinedPoolTab() {
     <div class="kpi-card"><div class="kpi-label">At-Risk Months</div><div class="kpi-val ${lowRisk > 0 ? 'neg' : 'pos'}">${lowRisk}</div><div class="kpi-delta" style="color:var(--muted)">of ${horizon} months</div></div>
   `;
 
+  // ── Spotlight-context banner ─────────────────────────────────────────
+  // Combined Pool is pair-driven (188 vs 47), not spotlight-driven, so
+  // changing the sidebar spotlight to a non-LP/DP product (e.g. Drug
+  // Substance) doesn't re-frame this tab. Surface that explicitly.
+  const _spotEl = document.getElementById('cpool-spotlight-banner');
+  if (_spotEl) {
+    const _sel = document.getElementById('sel-product');
+    const _spot = _sel ? _sel.value : '';
+    const _isPairProd = ['188mg LP','47mg LP','200mg DP','50mg DP','188mg LP - EU Stock','47mg LP - EU Stock'].includes(_spot);
+    if (_spot && !_isPairProd) {
+      _spotEl.style.display = '';
+      _spotEl.innerHTML = `<b>Heads up:</b> sidebar spotlight is <b>${_spot}</b>, but Combined Pool is driven by the Product Pair selector above (currently <b>${lpProd} + ${dpProd}</b>). The Drug Substance chart below already inherits the chosen pair — switch the pair to refocus this tab.`;
+    } else {
+      _spotEl.style.display = 'none';
+    }
+  }
+
   // ── Tiered stacked-bar chart ─────────────────────────────────────────
   // Stacked monthly: FDP (LP) inventory + DP inventory + FDP production +
   // DP production, with binding/non-binding color coding on production
@@ -8671,9 +8896,15 @@ function runCombinedPoolTab() {
     <!-- Body — populated by mdRender* per tab -->
     <div id="md-body" style="padding:14px 18px;overflow:auto;flex:1;min-height:0;"></div>
     <!-- Footer -->
-    <div style="padding:8px 18px;border-top:1px solid var(--border);background:rgba(26,43,94,0.02);font-size:10px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;">
-      <span id="md-footer-summary"></span>
-      <span>Edits persist in localStorage. Reload from workbook via <code>refresh_dashboard.py</code>.</span>
+    <div style="padding:8px 18px;border-top:1px solid var(--border);background:rgba(26,43,94,0.02);font-size:10px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span id="md-footer-summary" style="flex:1;min-width:0;"></span>
+      <span style="color:var(--muted);">Edits auto-save on every change.</span>
+      <button onclick="mdSaveAll()"
+              title="Force a snapshot of every Master Data table to localStorage. Edits already auto-save on each change — this button is here for reassurance."
+              style="font-size:11px;padding:5px 14px;background:var(--navy);color:#fff;border:none;border-radius:4px;font-weight:700;cursor:pointer;">💾 Save</button>
+      <button onclick="mdResetToWorkbook()"
+              title="Wipe persisted Master Data edits and reload the workbook defaults. Affects only the top-level data tables — lot / supplier / dependency / starting-BI override layers have their own reset paths."
+              style="font-size:11px;padding:5px 14px;background:transparent;color:var(--red);border:1px solid var(--red);border-radius:4px;font-weight:700;cursor:pointer;">↺ Reset to workbook</button>
     </div>
   </div>
 </div>
