@@ -804,6 +804,7 @@
                 <th style="text-align:right;" id="prod-ov-th-base-units">Base Units</th>
                 <th style="text-align:center;min-width:90px;">Scen Batches</th>
                 <th style="text-align:right;" id="prod-ov-th-delta-units">Δ Units</th>
+                <th title="When child-tier demand lands for this batch (DS for DP, DP for LP). Auto-derived from the parent supplier's Mfg LT + Alloc LT — edit to override when a one-off batch is routed to a non-primary supplier whose lead times differ from the registry pick. Clear to revert to auto.">Alloc Date</th>
                 <th style="text-align:center;">Actions</th>
               </tr>
             </thead>
@@ -1818,20 +1819,27 @@ function applyDPLeadTimeOffset(rows, lpProduct) {
   const lpMeta = getMeta(lpProduct);
   const lpRows = PROD_DATA.filter(r => r.product === lpProduct)
                            .sort((a,b) => a.month.localeCompare(b.month));
-  const lpProdByMonth = {};
-  lpRows.forEach(r => { lpProdByMonth[r.month] = r.prod || 0; });
-  return rows.map((r, i) => {
-    // Determine the LP supplier active at this DP allocation month so the shift
-    // reflects the supplier that will actually be running production.
-    const sup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(lpProduct, r.month) : null;
+  // Per-LP-batch allocation override map. Same shape as the DS cascade —
+  // allocationOverrides[lpProduct][lpProductionMonth] = "YYYY-MM-DD" forces
+  // the DP demand for that LP batch to land on the override date instead
+  // of the LT-derived month.
+  const ovMap = (typeof allocationOverrides === 'object' && allocationOverrides[lpProduct]) || {};
+  // Build DP demand map by walking LP production rows. Iterating by LP
+  // batch (vs by DP row + index lookahead) lets shifts vary by LP month
+  // — important when the LP supplier changes mid-horizon — and gives the
+  // per-LP-batch allocation override a natural place to land.
+  const dpDemandByMonth = {};
+  for (const lpr of lpRows) {
+    const prod = lpr.prod || 0;
+    if (prod <= 0) continue;
+    const sup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(lpProduct, lpr.month) : null;
     const mfgLT  = Math.round((sup && sup.lead_time     != null) ? sup.lead_time     : (lpMeta.lead_time     || 5));
     const allocLT= Math.round((sup && sup.allocation_lt != null) ? sup.allocation_lt : (lpMeta.allocation_lt || 0));
     const shift  = mfgLT + allocLT;
-    const futureIdx = i + shift;
-    const futureRow = rows[futureIdx];
-    const lpProd = futureRow ? (lpProdByMonth[futureRow.month] || 0) : 0;
-    return { ...r, demand: lpProd };
-  });
+    const dpMonth = ovMap[lpr.month] || _monthMinus(lpr.month, shift);
+    dpDemandByMonth[dpMonth] = (dpDemandByMonth[dpMonth] || 0) + prod;
+  }
+  return rows.map(r => ({ ...r, demand: dpDemandByMonth[r.month] || 0 }));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1933,8 +1941,16 @@ function _monthMinus(monthIso, n) {
 //   parent.allocation_lt = parent's component-allocation buffer (months before
 //                          parent mfg starts that children must be in hand)
 // child demand month = parent release month − (lead_time + allocation_lt)
+//
+// EXCEPTION: when allocationOverrides[parentProduct][parentMonth] is set,
+// it bypasses the LT math entirely. Useful for one-off batches where the
+// supplier routing doesn't match the registry's primary (e.g. a Mar 2028
+// 200mg DP batch routed to Simtra even though Patheon PDS-2 is the
+// registry's primary for that month, so editing Simtra's alloc_lt won't
+// take effect via getActiveSupplier).
 function deriveChildDemand(parentProduct, parentSchedRows, childProduct) {
   const demandByChildMonth = {};
+  const ovMap = (typeof allocationOverrides === 'object' && allocationOverrides[parentProduct]) || {};
   for (const pr of parentSchedRows) {
     const prod = pr.prod || 0;
     if (prod <= 0) continue;
@@ -1945,7 +1961,8 @@ function deriveChildDemand(parentProduct, parentSchedRows, childProduct) {
     const allocLT = Math.round(pr.allocationLT != null ? pr.allocationLT
                               : (supRow?.allocation_lt != null ? supRow.allocation_lt : 0));
     const shift   = mfgLT + allocLT;
-    const childMonth = _monthMinus(pr.month, shift);
+    // Per-batch allocation override wins over the LT-derived shift.
+    const childMonth = ovMap[pr.month] || _monthMinus(pr.month, shift);
     const factor = _lookupDepFactor(parentProduct, childProduct, pr.month, sup);
     const childUnits = prod * factor;
     demandByChildMonth[childMonth] = (demandByChildMonth[childMonth] || 0) + childUnits;
@@ -2028,6 +2045,46 @@ function clearBIOverride(product) {
 // ── SUPPLIER TOGGLE OVERRIDES ───────────────────────────────────────────────
 // supplierOverrides[product][supplier] = { manual_toggle: 0|1, primary: 0|1 }
 // Layered on top of SUPPLIER_REGISTRY so the workbook stays canonical. A field
+// ── ALLOCATION-DATE OVERRIDES ───────────────────────────────────────────────
+// Per-batch override of when child demand should land in the cascade. Used
+// when a specific parent batch is routed to a non-primary supplier whose
+// lead times differ from the registry pick, so editing the supplier's
+// alloc_lt wouldn't move that batch's child demand (getActiveSupplier
+// returns the primary, not the routed supplier).
+//
+// Shape: allocationOverrides[parentProduct][parentMonthIso] = childMonthIso
+//   parentProduct  — e.g. "200mg DP"
+//   parentMonthIso — month when the parent is produced (delivery month)
+//   childMonthIso  — when the child demand should appear (replaces the
+//                    auto-derived parentMonth − (mfgLT + allocLT))
+//
+// Persisted to localStorage so edits survive a reload. Read by
+// applyDPLeadTimeOffset (LP → DP) and deriveChildDemand (any tier).
+let allocationOverrides = {};
+try {
+  allocationOverrides = JSON.parse(localStorage.getItem('geron_alloc_overrides') || '{}');
+} catch (e) { allocationOverrides = {}; }
+function _persistAllocOverrides() {
+  try { localStorage.setItem('geron_alloc_overrides', JSON.stringify(allocationOverrides)); } catch (e) {}
+}
+function setAllocationOverride(product, month, childMonth) {
+  if (!allocationOverrides[product]) allocationOverrides[product] = {};
+  if (!childMonth) {
+    delete allocationOverrides[product][month];
+    if (!Object.keys(allocationOverrides[product]).length) delete allocationOverrides[product];
+  } else {
+    // Normalize to YYYY-MM-01 so the cascade map keying lines up with
+    // PROD_DATA month strings.
+    const norm = childMonth.slice(0,7) + '-01';
+    allocationOverrides[product][month] = norm;
+  }
+  _persistAllocOverrides();
+  if (typeof runScenario === 'function') runScenario();
+}
+function getAllocationOverride(product, month) {
+  return (allocationOverrides[product] && allocationOverrides[product][month]) || null;
+}
+
 // only counts as "overridden" if it's present; missing fields fall through to
 // the registry value. Persisted to localStorage.
 let supplierOverrides = {};
@@ -2418,7 +2475,7 @@ function renderProdOverrideTable() {
   if (_thDU) _thDU.textContent = `Δ ${unitCap}`;
 
   if (!showRows.length) {
-    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:12px;">No scheduled production for <strong>${product}</strong> in the view window.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:12px;">No scheduled production for <strong>${product}</strong> in the view window.</td></tr>`;
     return;
   }
 
@@ -2435,6 +2492,8 @@ function renderProdOverrideTable() {
   // so we must show 1 decimal everywhere on this row.
   const qd = (meta && meta.unit === 'kg') ? 1 : 0;
   const fmtBS = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: qd, maximumFractionDigits: qd });
+  // Quote-safe inline handler arg.
+  const safe = s => String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;');
 
   tbody.innerHTML = showRows.map(r => {
     const isBinding = bindingThrough && r.month < bindingThrough;
@@ -2462,6 +2521,27 @@ function renderProdOverrideTable() {
       ? `<span style="font-size:10px;background:#FFA300;color:#003B5C;padding:1px 6px;border-radius:8px;font-weight:700;">BINDING</span>`
       : `<span style="font-size:10px;background:#d1fae5;color:#065f46;padding:1px 6px;border-radius:8px;font-weight:700;">OPEN</span>`;
 
+    // Auto-derived child allocation month from the active supplier's LTs.
+    // If the user has explicitly set allocationOverrides[product][month],
+    // that wins and gets a gold-bordered input + revert button so it's
+    // obvious that this row is escaping the LT math.
+    const _mfg   = Math.round((regSup && regSup.lead_time     != null) ? regSup.lead_time     : (meta.lead_time     || 0));
+    const _alloc = Math.round((regSup && regSup.allocation_lt != null) ? regSup.allocation_lt : (meta.allocation_lt || 0));
+    const _autoAllocMonth = _monthMinus(r.month, _mfg + _alloc).slice(0,7);  // YYYY-MM
+    const _allocOv = (typeof getAllocationOverride === 'function') ? getAllocationOverride(product, r.month) : null;
+    const _allocDisp = _allocOv ? _allocOv.slice(0,7) : _autoAllocMonth;
+    const _allocStyle = _allocOv ? 'border:1px solid var(--gold);background:#fffbeb;font-weight:700;' : '';
+    const _allocCell = `
+      <td style="text-align:center;white-space:nowrap;">
+        <input type="month" value="${_allocDisp}"
+          title="${_allocOv ? 'Per-batch override — auto-derived was ' + _autoAllocMonth : 'Auto-derived from Mfg LT ' + _mfg + ' + Alloc LT ' + _alloc + ' (supplier: ' + supName + ')'}"
+          style="font-size:11px;padding:1px 3px;width:110px;${_allocStyle}"
+          onchange="setAllocationOverride('${safe(product)}','${r.month}', this.value ? this.value + '-01' : null)">
+        ${_allocOv ? `<button onclick="setAllocationOverride('${safe(product)}','${r.month}', null)"
+          title="Revert to auto-derived (${_autoAllocMonth})"
+          style="margin-left:3px;font-size:10px;padding:1px 5px;background:transparent;border:1px solid var(--muted);border-radius:3px;color:var(--muted);cursor:pointer;">↺</button>` : ''}
+      </td>`;
+
     return `<tr style="${rowBg}">
       <td style="white-space:nowrap;">${monthLabel(r.month)}</td>
       <td style="font-size:11px;color:var(--muted);">${supName}</td>
@@ -2483,6 +2563,7 @@ function renderProdOverrideTable() {
         </div>
       </td>
       <td style="text-align:right;font-weight:600;color:${deltaColor};">${deltaFmt}</td>
+      ${_allocCell}
       <td style="text-align:center;">
         <button onclick="setProdOverride('${product}','${r.month}',0)"
           title="Cancel — set scenario batches to 0"
@@ -5062,11 +5143,19 @@ function renderExpiryGantt(product, lots, opts) {
       visualStarts[l.lot] = today;  // bar not drawn for these
       continue;
     }
-    // Anchor each lot to where the previous one's bar ended (= its displayed
-    // scenRunout). DOM, if set later than the cursor, supersedes.
-    let vs = (chainCursor < today) ? today : chainCursor;
-    if (l.dom && l.dom > vs) vs = l.dom;
-    // Don't let bars start past their own runout (sliver edge case)
+    // Anchor each lot to the LATER of: today, the prior lot's runout
+    // (FEFO chain), the lot's DOM (production gate), and the lot's own
+    // consumeStart (the FEFO month when cumulative demand actually
+    // reaches this lot). The consumeStart clamp is what stops the bar
+    // from extending backward into months that haven't accrued any
+    // demand yet — a real lot with low-demand spotlights or a DS lot
+    // far from its first DP-batch draw shouldn't visually decrement
+    // until demand actually starts arriving.
+    let vs = today;
+    if (l.consumeStart && l.consumeStart > vs) vs = l.consumeStart;
+    if (chainCursor      > vs) vs = chainCursor;
+    if (l.dom            && l.dom > vs) vs = l.dom;
+    // Don't let bars start past their own runout (sliver edge case).
     const endIso = l.scenRunout || l.expiry;
     if (endIso && vs > endIso) vs = endIso;
     visualStarts[l.lot] = vs;
@@ -7096,6 +7185,7 @@ function _mdPersistAll() {
   // batches survive a reload. Other override layers already self-persist
   // via their own _persist*() helpers.
   try { localStorage.setItem('geron_prod_overrides', JSON.stringify(prodOverrides || {})); } catch (e) {}
+  try { localStorage.setItem('geron_alloc_overrides', JSON.stringify(allocationOverrides || {})); } catch (e) {}
 }
 // Load the persisted state back onto the live globals at boot. Called
 // from init() before runScenario() so the first render reflects the
@@ -7135,6 +7225,7 @@ function _mdClearPersistedState() {
     try { localStorage.removeItem(_mdLSKey(k)); } catch (e) {}
   }
   try { localStorage.removeItem('geron_prod_overrides'); } catch (e) {}
+  try { localStorage.removeItem('geron_alloc_overrides'); } catch (e) {}
 }
 // User-facing Save button. Re-snapshots state and shows a toast.
 function mdSaveAll() {
