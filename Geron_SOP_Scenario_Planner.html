@@ -425,7 +425,7 @@
       <div class="section-body" title="Controls all charts and tables. KPIs reflect the same window.">
         <label>Display months: <span class="val-display" id="view-months-disp">36</span></label>
         <input type="range" id="view-months" min="12" max="180" step="6" value="36"
-          oninput="document.getElementById('view-months-disp').textContent=this.value; runScenario()">
+          oninput="document.getElementById('view-months-disp').textContent=this.value; runScenario(); if (typeof runCombinedPoolTab === 'function') runCombinedPoolTab();">
       </div>
     </div>
 
@@ -1148,11 +1148,9 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
               oninput="document.getElementById('cpool-sf-disp').textContent=this.value+'%'; _syncMainSF(this.value); runScenario(); runCombinedPoolTab();"
               style="width:160px;">
           </div>
-          <div style="display:flex;flex-direction:column;gap:4px;min-width:120px;">
-            <label style="font-size:11px;font-weight:600;color:var(--muted);">View Horizon (mo)</label>
-            <input type="number" id="cpool-horizon" value="36" min="12" max="120" step="6"
-              oninput="runCombinedPoolTab()"
-              style="width:80px;font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;">
+          <div style="display:flex;flex-direction:column;gap:4px;min-width:160px;color:var(--muted);font-size:11px;">
+            <label style="font-weight:600;">View Horizon</label>
+            <div style="padding:6px 8px;font-style:italic;" title="Driven by the sidebar's Display months slider. Move that to change the cpool x-axis range.">Set via sidebar slider</div>
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;min-width:100px;">
             <label style="font-size:11px;font-weight:600;color:var(--muted);">Target MOH</label>
@@ -8458,7 +8456,10 @@ function runCombinedPoolTab() {
 
   const pair     = document.getElementById('cpool-pair')?.value || '188';
   const sf       = parseInt(document.getElementById('sales-factor')?.value || 100) / 100;
-  const horizon  = Math.min(parseInt(document.getElementById('cpool-horizon')?.value || 36), 120);
+  // Single source of truth for horizon: the sidebar's Display-months
+  // slider. The dedicated cpool-horizon input was removed so the cpool
+  // tab follows the same x-axis range as every other chart.
+  const horizon  = Math.min(parseInt(document.getElementById('view-months')?.value || 36), 180);
   const tgtMOH   = parseFloat(document.getElementById('cpool-target-moh')?.value || 18);
   const critMOH  = parseFloat(document.getElementById('cpool-critical-moh')?.value || 16);
   const overstockMOH = tgtMOH + 6;  // overstock ceiling 6mo above target (default 24)
