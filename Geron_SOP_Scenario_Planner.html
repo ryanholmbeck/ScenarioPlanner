@@ -3011,8 +3011,16 @@ function computeFefoScenario(product, scenRows, lotsOverride) {
         if (consumeStart === null && cd >= prevCumulative) consumeStart = m;
         if (cd >= cumulativeConsumed) { runout = m; break; }
       }
-      if (!consumeStart) consumeStart = months[0] || (lot.expiry || '').slice(0,7) + '-01';
-      if (!runout)       runout       = (lot.expiry || '').slice(0,7) + '-01';
+      // Demand never fully consumes this lot → it runs out at expiry.
+      if (!runout) runout = (lot.expiry || '').slice(0,7) + '-01';
+      // Demand never even REACHES this lot (it sits behind enough earlier-
+      // expiry supply that cumulative demand never climbs to its start
+      // threshold). It is never consumed — collapse its window to the
+      // runout so the Gantt shows a sliver at expiry (fully at scrap
+      // risk), NOT a full-width bar back at the first month. The old
+      // months[0] fallback is what made an excess long-dated lot paint as
+      // "expiring immediately" from today.
+      if (!consumeStart) consumeStart = runout;
     }
 
     const expDt  = new Date((lot.expiry || '').slice(0,10));
