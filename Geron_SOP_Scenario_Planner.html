@@ -5301,36 +5301,28 @@ function renderExpiryGantt(product, lots, opts) {
 
   const sorted = filtered.slice();
 
-  // Visual chain — each lot's blue bar starts where the previous OK lot's
-  // displayed runout ended (so bars chain end-to-end, no overlaps and no
-  // gaps). DOM gates and cascading supply delays still override when active.
-  // Without this, the bar START used the computed FEFO chain while the bar
-  // END used workbook scenRunout, and the two drift apart for later lots
-  // because workbook runouts assume different demand growth than PROD_DATA.
+  // Bar start = the FEFO engine's own per-lot start. computeFefoScenario
+  // already chains the lots (consumeStart = the month cumulative demand
+  // reaches this lot; effectiveStart = consumeStart shifted right by a DOM
+  // gate or cascading supply delay). Using that directly — instead of a
+  // hand-rolled chainCursor — keeps the Gantt aligned with the engine in
+  // every case: an added lot slots into its expiry position, and a
+  // re-activated On-Hold lot rejoins exactly where the engine puts it.
+  // The old chainCursor approach diverged from the engine whenever a lot's
+  // demand window had a gap, scrambling the waterfall on add / un-hold.
   const visualStarts = {};
-  let chainCursor = today;
   for (const l of sorted) {
     if (l.isOnHold || l.forceAtRisk) {
       visualStarts[l.lot] = today;  // bar not drawn for these
       continue;
     }
-    // Anchor each lot to the LATER of: today, the prior lot's runout
-    // (FEFO chain), the lot's DOM (production gate), and the lot's own
-    // consumeStart (the FEFO month when cumulative demand actually
-    // reaches this lot). The consumeStart clamp is what stops the bar
-    // from extending backward into months that haven't accrued any
-    // demand yet — a real lot with low-demand spotlights or a DS lot
-    // far from its first DP-batch draw shouldn't visually decrement
-    // until demand actually starts arriving.
-    let vs = today;
-    if (l.consumeStart && l.consumeStart > vs) vs = l.consumeStart;
-    if (chainCursor      > vs) vs = chainCursor;
-    if (l.dom            && l.dom > vs) vs = l.dom;
+    let vs = l.effectiveStart || l.consumeStart || today;
+    if (vs < today) vs = today;            // never decrement in the past
+    if (l.dom && l.dom > vs) vs = l.dom;    // can't ship before manufacture
     // Don't let bars start past their own runout (sliver edge case).
     const endIso = l.scenRunout || l.expiry;
     if (endIso && vs > endIso) vs = endIso;
     visualStarts[l.lot] = vs;
-    if (endIso) chainCursor = endIso;
   }
 
   const LABEL_W = 110;
