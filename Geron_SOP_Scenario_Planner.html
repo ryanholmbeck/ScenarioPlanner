@@ -5069,10 +5069,18 @@ function updateExpiryTab(product, baseRows, scenRows) {
         releaseBy = releaseByInfo?.date || null;
       }
 
+      // liveRunout is the FEFO engine's own runout for this lot (always the
+      // live chain value, never the workbook fallback). The Gantt uses it so
+      // the bar END comes from the same computation as the bar START
+      // (effectiveStart) — otherwise toggling a lot's status leaves the table's
+      // workbook-trusted scenRunout stale while effectiveStart is live, and
+      // the bar's two ends disagree (the on-hold→OK misalignment).
+      const liveRunout = (isOnHold || forceAtRisk) ? scenRunout
+                         : (scenLot?.scenRunout || scenRunout);
       return { lot: lot.lot, product: lotProduct, expiry: lot.expiry, effExp,
                dom: lot.dom || null,
                lotStatus, isOnHold, forceAtRisk,
-               baseRunout, scenRunout, consumeStart, effectiveStart, avail: lot.avail,
+               baseRunout, scenRunout, liveRunout, consumeStart, effectiveStart, avail: lot.avail,
                gapStart, gapEnd, gapQty,
                baseRisk, scenRisk, bRisk, sRisk, statusDelta,
                monthlyDemand, releaseBy, releaseByInfo,
@@ -5337,8 +5345,9 @@ function renderExpiryGantt(product, lots, opts) {
     let vs = l.effectiveStart || l.consumeStart || today;
     if (vs < today) vs = today;            // never decrement in the past
     if (l.dom && l.dom > vs) vs = l.dom;    // can't ship before manufacture
-    // Don't let bars start past their own runout (sliver edge case).
-    const endIso = l.scenRunout || l.expiry;
+    // Don't let bars start past their own runout (sliver edge case). Use the
+    // live-chain runout so start and end come from the same computation.
+    const endIso = l.liveRunout || l.scenRunout || l.expiry;
     if (endIso && vs > endIso) vs = endIso;
     visualStarts[l.lot] = vs;
   }
@@ -5347,7 +5356,10 @@ function renderExpiryGantt(product, lots, opts) {
   const ROW_H   = 30;
 
   const rowsHtml = sorted.map((l, i) => {
-    const runout     = l.scenRunout || l.expiry;
+    // Bar END uses the live-chain runout (same source as the start) so the
+    // bar is internally consistent. The table still shows the workbook-
+    // trusted scenRunout separately.
+    const runout     = l.liveRunout || l.scenRunout || l.expiry;
     const expIso     = l.expiry;
     const riskCutoff = _addMonthsIso(expIso, -shortDateMo);
     // visualStart comes from the sequential chain above so each lot's bar
