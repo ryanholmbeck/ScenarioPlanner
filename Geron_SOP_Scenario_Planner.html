@@ -2304,59 +2304,69 @@ function _projectedLotsForProduct(fdpProduct) {
                  : null;
   if (!sourceDP) return [];
 
+  // Shelf life for projected FDP lots = 5 years (per planning rule), unless
+  // the product's RAW.shelf_life_mo is explicitly set to something else.
+  const FIVE_YEARS = 60;
   const shelfMo = (typeof RAW === 'object' && RAW && RAW[fdpProduct]
-                    && RAW[fdpProduct].shelf_life_mo) || 24;
+                    && RAW[fdpProduct].shelf_life_mo) || FIVE_YEARS;
 
-  // Collect every month with either committed DP prod or a scenario override.
-  const dpRows = (typeof PROD_DATA !== 'undefined' ? PROD_DATA : [])
-                  .filter(r => r.product === sourceDP);
-  const ov     = (typeof prodOverrides === 'object' && prodOverrides[sourceDP]) || {};
-  const dpByMonth = {};
-  dpRows.forEach(r => { dpByMonth[r.month] = r; });
-  const monthsSet = new Set([...Object.keys(dpByMonth), ...Object.keys(ov)]);
-  const months    = [...monthsSet].sort();
+  // Source the DP production projection from the Combined Pool (committed +
+  // MRP-scheduled batches) — this is the forward production the user sees on
+  // the Combined Pool tab. Falls back to the standard cascade's DP MRP, then
+  // to raw committed PROD_DATA, if the cpool hasn't been rendered yet.
+  let dpProjByMonth = null;
+  if (window.__cpoolProjection && window.__cpoolProjection[sourceDP]
+      && Object.keys(window.__cpoolProjection[sourceDP]).length) {
+    dpProjByMonth = window.__cpoolProjection[sourceDP];
+  } else if (window.__cascade && window.__cascade.byProduct
+             && Array.isArray(window.__cascade.byProduct[sourceDP])) {
+    dpProjByMonth = {};
+    window.__cascade.byProduct[sourceDP].forEach(r => { dpProjByMonth[r.month] = r.prod || 0; });
+  } else {
+    dpProjByMonth = {};
+    (typeof PROD_DATA !== 'undefined' ? PROD_DATA : [])
+      .filter(r => r.product === sourceDP)
+      .forEach(r => { dpProjByMonth[r.month] = r.prod || 0; });
+  }
+
+  const months = Object.keys(dpProjByMonth).sort();
 
   const out = [];
   for (const month of months) {
-    const dpRow = dpByMonth[month] || null;
-    const dpSup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(sourceDP, month) : null;
-    const bs    = (dpSup && dpSup.batch_size)
-                  || (dpRow && dpRow.batch_size)
-                  || (RAW[sourceDP] && RAW[sourceDP].batch_size)
-                  || 1;
-    const committed = dpRow ? (dpRow.prod || 0) : 0;
-    const eff = (typeof getEffectiveProd === 'function')
-                ? getEffectiveProd(sourceDP, month, bs, committed)
-                : { units: committed, fromOverride: false, cancelled: false };
-    if (eff.cancelled || !eff.units || eff.units <= 0) continue;
+    const units = dpProjByMonth[month] || 0;
+    if (units <= 0) continue;
 
-    // FDP release month = DP month + LP supplier's Mfg LT (Alloc LT is the
-    // buffer BEFORE LP mfg starts, so it doesn't extend release date).
+    const dpSup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(sourceDP, month) : null;
+
+    // The Combined Pool plots this batch as available at `month` (its
+    // delivery / shows-as-available date). Per planning rule:
+    //   DOM    = delivery date − FDP lead time   (manufacture date)
+    //   expiry = DOM + 5 years
     const fdpSup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(fdpProduct, month) : null;
     const lpLT   = Math.round((fdpSup && fdpSup.lead_time != null) ? fdpSup.lead_time
                               : ((RAW[fdpProduct] && RAW[fdpProduct].lead_time) || 3));
-    const dom    = _monthMinus(month, -lpLT);    // _monthMinus(iso, -n) = iso + n months
-    const expiry = _monthMinus(dom,   -shelfMo);
+    const dom    = _monthMinus(month, lpLT);      // delivery − lead time
+    const expiry = _monthMinus(dom, -shelfMo);    // DOM + 5 years
 
-    // seq must sort projected lots after real ones but in DOM order among themselves.
-    // 10000 base + months-since-epoch gives a stable, monotonic ordering.
+    // seq sorts projected lots after real ones; the FEFO chain itself now
+    // orders by expiry, so this is just a stable tiebreaker.
     const domSince = (new Date(dom).getFullYear() - 2020) * 12 + new Date(dom).getMonth();
 
     out.push({
-      lot:      `PROJ-${sourceDP.replace(/\s/g,'')}-${month.slice(0,7)}` + (eff.fromOverride ? '-SCEN' : ''),
+      lot:      `PROJ-${sourceDP.replace(/\s/g,'')}-${month.slice(0,7)}`,
       product:  fdpProduct,
       seq:      10000 + domSince,
       status:   'OK',
-      avail:    eff.units,
+      avail:    units,
       dom,
       expiry,
       runout:   null,
       risk:     0,
       supplier: dpSup ? dpSup.supplier : '',
-      _projected:    true,
-      _sourceDP:     sourceDP,
-      _sourceMonth:  month,
-      _fromOverride: !!eff.fromOverride,
+      _projected:   true,
+      _sourceDP:    sourceDP,
+      _sourceMonth: month,
+      _deliveryDate: month,
     });
   }
   return out;
@@ -5104,7 +5114,7 @@ function updateExpiryTab(product, baseRows, scenRows) {
     // Projected lots get a navy PROJECTED chip; the tooltip surfaces the
     // upstream DP source month so the user can trace it back to Production.
     const projBadge = isProj
-      ? ` <span title="Projected from ${l.sourceDP || 'DP'} production at ${l.sourceMonth ? l.sourceMonth.slice(0,7) : '?'} via ${l.supplier || '(no supplier)'}${l.fromOverride ? ' — includes scenario override' : ''}. DOM = DP month + FDP supplier Mfg LT. Expiry = DOM + shelf life. Change the Production Schedule tab to adjust." style="font-size:8px;background:var(--navy-light);color:white;border-radius:3px;padding:1px 4px;font-weight:700;">PROJ${l.fromOverride ? '+SCEN' : ''}</span>`
+      ? ` <span title="Projected from the Combined Pool's ${l.sourceDP || 'DP'} production at ${l.sourceMonth ? l.sourceMonth.slice(0,7) : '?'} (delivery month). DOM = delivery − FDP lead time; Expiry = DOM + 5 years. Adjust on the Combined Pool / Production Schedule tabs." style="font-size:8px;background:var(--navy-light);color:white;border-radius:3px;padding:1px 4px;font-weight:700;">PROJ</span>`
       : '';
     const lotLabelCell = `<td style="font-family:monospace;font-size:11px;${(isAdded||isMod) ? 'border-left:2px solid var(--gold);padding-left:6px;' : ''}">${l.lot}${isAdded ? ' <span style=\"font-size:8px;color:var(--gold);font-weight:700;\">NEW</span>' : ''}${projBadge}</td>`;
     const inactiveBadge = l.forceAtRisk && l.product !== product
@@ -8775,6 +8785,15 @@ function runCombinedPoolTab() {
     });
     poolBI = poolEI;
   }
+
+  // Stash the Combined Pool's projected DP production (committed +
+  // MRP-scheduled) by month so the Expiry Risk tab's projected-lots
+  // feature can source forward FDP lots from the SAME projection the
+  // user sees here — not just raw committed PROD_DATA. Keyed by DP
+  // product so 188/47 pairs each cache independently.
+  window.__cpoolProjection = window.__cpoolProjection || {};
+  window.__cpoolProjection[dpProd] = {};
+  scenRows.forEach(r => { window.__cpoolProjection[dpProd][r.month] = r.dpProd || 0; });
 
   // ── Update KPI row ────────────────────────────────────────────────────
   const viewRows = scenRows.slice(0, horizon);
