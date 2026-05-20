@@ -2920,13 +2920,25 @@ function applySupplyMode(product, rows, salesFactor) {
 // ══════════════════════════════════════════════════════════════════════════════
 //  FEFO SCENARIO — recalculate runout dates based on scenario demand
 // ══════════════════════════════════════════════════════════════════════════════
+// True First-Expiry-First-Out ordering: lots are consumed by earliest
+// expiry, with seq as a stable tiebreaker for equal-expiry lots. This is
+// what makes added lots (which get seq = max+1) and re-activated On-Hold
+// lots slot into the chain by their actual expiry rather than landing at
+// the end of the sequence and falsely reading as unconsumed / expiring.
+function _fefoLotSort(a, b) {
+  const ea = (a && a.expiry) ? String(a.expiry).slice(0,10) : '9999-12-31';
+  const eb = (b && b.expiry) ? String(b.expiry).slice(0,10) : '9999-12-31';
+  if (ea !== eb) return ea < eb ? -1 : 1;
+  return (a.seq || 0) - (b.seq || 0);
+}
+
 function computeFefoScenario(product, scenRows, lotsOverride) {
   // Default: real lots filtered to spotlight product. The Expiry Risk tab
   // passes lotsOverride when it wants to chain projected (DP→LP) lots
   // alongside the real ones for the Scenario column.
   const lots = (Array.isArray(lotsOverride) && lotsOverride.length)
-    ? lotsOverride.filter(l => l.product === product).slice().sort((a,b) => (a.seq||0) - (b.seq||0))
-    : _effectiveFEFOLots().filter(l => l.product === product).sort((a,b) => a.seq - b.seq);
+    ? lotsOverride.filter(l => l.product === product).slice().sort(_fefoLotSort)
+    : _effectiveFEFOLots().filter(l => l.product === product).slice().sort(_fefoLotSort);
   if (!lots.length) return [];
 
   // Build cumulative scenario demand map, then extrapolate beyond the loaded
@@ -4725,7 +4737,7 @@ function updateExpiryTab(product, baseRows, scenRows) {
   const inactiveLPProduct = null;  // never inject companion product
 
   const fefoBase = _effectiveFEFOLots().filter(l => l.product === product)
-    .sort((a,b) => (a.seq || 0) - (b.seq || 0));
+    .slice().sort(_fefoLotSort);
   const fefoInactive = [];
   // ── Projected lots: auto-derived from DP production schedule ─────────────
   // Toggle-gated and scenario-only — real lots own the Base column; projected
@@ -4734,7 +4746,7 @@ function updateExpiryTab(product, baseRows, scenRows) {
   const includeProjected = !!document.getElementById('expiry-show-projected')?.checked;
   const projectedLots    = includeProjected ? _projectedLotsForProduct(product) : [];
   const allScenLots      = fefoBase.concat(projectedLots)
-                           .sort((a,b) => (a.seq || 0) - (b.seq || 0));
+                           .slice().sort(_fefoLotSort);
 
   // Pad scenRows with baseRows' real demand tail when scenRows is shorter
   // (it usually is — runMRP horizon < PROD_DATA horizon). Without this,
@@ -4752,7 +4764,7 @@ function updateExpiryTab(product, baseRows, scenRows) {
   // Base chain sees only real lots — projected production isn't real inventory
   // yet, so the Base column for projected rows correctly reads as blank.
   const fefoBaseChained = computeFefoScenario(product, baseRows, fefoBase);
-  // Scenario chain sees real + projected, sorted by seq (DOM-aligned for proj).
+  // Scenario chain sees real + projected, ordered first-expiry-first-out.
   const fefoScen        = computeFefoScenario(product, scenRowsEff, allScenLots);
   // Lot-ID lookup so buildLotRows can correlate each display row with its
   // base/scen FEFO entry (array indices no longer align across the two chains).
