@@ -873,7 +873,6 @@ Month inventory becomes available after lead time">Release Month</th>
       <div class="card">
         <div class="card-header">
           <div class="card-title" id="demand-chart-title">Quarterly Demand Forecast</div>
-          <div class="card-subtitle" id="title-demand-sub">Base vs Scenario</div>
         </div>
         <div class="chart-container" style="height:220px;">
           <canvas id="chart-demand"></canvas>
@@ -888,7 +887,6 @@ Month inventory becomes available after lead time">Release Month</th>
       <div class="card">
         <div class="card-header">
           <div class="card-title" id="title-demand-mix">Demand Mix — Region × Indication</div>
-          <div class="card-subtitle">Stacked monthly demand split by (region, indication) pair for the spotlight product. Aggregation follows the sidebar period control.</div>
         </div>
         <div class="chart-container" style="height:240px;">
           <canvas id="chart-demand-mix"></canvas>
@@ -1194,7 +1192,6 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
         <div class="card-header">
           <div>
             <div class="card-title" id="cpool-tiered-title">FDP &amp; DP — Inventory + Production with Safety Stock</div>
-            <div class="card-subtitle">Stacked monthly: <b>FDP inventory</b> (navy) + <b>FDP production</b> (Geron-blue = binding · green = non-binding) + <b>DP inventory</b> (gold) + <b>DP production</b> (purple = binding · green = non-binding). Lines (foreground): monthly demand (cyan), 6-mo rolling cumulative demand (red), 1-yr rolling cumulative demand (navy). Re-renders live on every scenario / supplier / sales-factor change.</div>
           </div>
         </div>
         <div class="chart-container" style="height:340px;">
@@ -1208,7 +1205,6 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
         <div class="card-header">
           <div>
             <div class="card-title" id="cpool-ds-title">Drug Substance — Inventory + Production with Safety Stock</div>
-            <div class="card-subtitle">Stacked monthly: <b>DS inventory</b> (gold) + <b>DS production</b> (purple = binding · green = non-binding). Lines (foreground): monthly DS demand (cyan) and rolling 6-mo / 1-yr cumulative DS demand (red / navy). DS demand is derived from the chosen DP product's production schedule via the dependency factor, so it inherits the lumpy by-batch profile (the deck calls this out — DS demand is per-DP-batch, not smooth like patient demand). Binding window = 18 months from today.</div>
           </div>
         </div>
         <div class="chart-container" style="height:300px;">
@@ -8825,16 +8821,17 @@ function runCombinedPoolTab() {
   const lpProdCol  = viewRows.map(r => (lpBT && r.month < lpBT) ? FDP_BIND : NONBIND);
   const dpProdCol  = viewRows.map(r => (dpBT && r.month < dpBT) ? DP_BIND  : NONBIND);
   // Forward-rolling cumulative LP demand at each month — taken from lpScen
-  // which extends past the chart's view horizon, so the 6 / 12-mo windows
-  // don't truncate near the right edge.
-  const safety6mo = viewRows.map((r, i) => {
-    let sum = 0;
-    for (let j = i; j < Math.min(i + 6, lpScen.length); j++) sum += lpScen[j]?.demand || 0;
-    return sum;
-  });
+  // which extends past the chart's view horizon, so the 12 / 24-mo windows
+  // don't truncate near the right edge. (LP+DP uses 1-yr / 2-yr; the DS
+  // chart below uses 6-mo / 1-yr.)
   const safety1yr = viewRows.map((r, i) => {
     let sum = 0;
     for (let j = i; j < Math.min(i + 12, lpScen.length); j++) sum += lpScen[j]?.demand || 0;
+    return sum;
+  });
+  const safety2yr = viewRows.map((r, i) => {
+    let sum = 0;
+    for (let j = i; j < Math.min(i + 24, lpScen.length); j++) sum += lpScen[j]?.demand || 0;
     return sum;
   });
   destroyChart('cpool-chart-tiered');
@@ -8868,8 +8865,8 @@ function runCombinedPoolTab() {
         // against navy/gold/purple bars; --red 1-yr and --navy 2-yr keep
         // the deck's three-line semantic.
         { label: 'Forecasted Demand',    data: demandD,   type: 'line', borderColor: '#05C3DD', backgroundColor: '#05C3DD', borderWidth: 4,   pointRadius: 2, pointBackgroundColor: '#05C3DD', fill: false, order: 0 },
-        { label: '6-mo Safety Stock',    data: safety6mo, type: 'line', borderColor: '#F9413A', backgroundColor: '#F9413A', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#F9413A', fill: false, order: 0 },
-        { label: '1-yr Safety Stock',    data: safety1yr, type: 'line', borderColor: '#003B5C', backgroundColor: '#003B5C', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#003B5C', fill: false, order: 0 },
+        { label: '1-yr Safety Stock',    data: safety1yr, type: 'line', borderColor: '#F9413A', backgroundColor: '#F9413A', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#F9413A', fill: false, order: 0 },
+        { label: '2-yr Safety Stock',    data: safety2yr, type: 'line', borderColor: '#003B5C', backgroundColor: '#003B5C', borderWidth: 3.5, pointRadius: 2, pointBackgroundColor: '#003B5C', fill: false, order: 0 },
       ],
     },
     options: { responsive: true, maintainAspectRatio: false,
@@ -8899,30 +8896,44 @@ function runCombinedPoolTab() {
   if (tt) tt.textContent = `${lpProd} & ${dpProd} — Inventory + Production with Safety Stock`;
 
   // ── DS (Drug Substance) tier ─────────────────────────────────────────
-  // DS demand is derived from the chosen DP product's production schedule
-  // via the dependency factor (DS kg per DP batch). Inventory + scheduled
-  // batches come from running MRP on Drug Substance with that demand —
-  // matches the standard cascade path but scoped to whichever pair the
-  // user has selected, so 200mg DP and 50mg DP each get their own view.
+  // DS demand is driven by ALL DP manufacturing (200mg DP + 50mg DP), not
+  // just the selected pair — DS is the shared upstream API. We read the
+  // live cascade (window.__cascade), which already aggregates DS demand
+  // across both DP products and runs DS MRP once. Falls back to a
+  // pair-scoped compute only if the cascade hasn't been built yet.
   let dsRows = [];
   let dsDemByMonth = {};
   try {
-    if (typeof deriveChildDemand === 'function' && typeof getBaseRows === 'function') {
-      const dpRowsForDS = scenRows.map(r => ({ month: r.month, prod: r.dpProd }));
-      dsDemByMonth = deriveChildDemand(dpProd, dpRowsForDS, 'Drug Substance');
+    const casc = window.__cascade;
+    if (casc && casc.byProduct && Array.isArray(casc.byProduct['Drug Substance'])) {
+      const dsByMonth = {};
+      casc.byProduct['Drug Substance'].forEach(r => { dsByMonth[r.month] = r; });
+      // Align to the cpool x-axis (viewRows months).
+      dsRows = viewRows.map(vr => dsByMonth[vr.month] || { month: vr.month, ei: 0, prod: 0 });
+      dsDemByMonth = casc.demandByProduct && casc.demandByProduct['Drug Substance'] || {};
+    } else if (typeof deriveChildDemand === 'function' && typeof getBaseRows === 'function') {
+      // Fallback: aggregate DS demand from both DP products' schedules.
+      const dsAgg = {};
+      for (const dp of ['200mg DP', '50mg DP']) {
+        const dpBase = getBaseRows(dp);
+        const partial = deriveChildDemand(dp, dpBase, 'Drug Substance');
+        for (const [mo, q] of Object.entries(partial)) dsAgg[mo] = (dsAgg[mo] || 0) + q;
+      }
+      dsDemByMonth = dsAgg;
       const dsBase = getBaseRows('Drug Substance');
       if (dsBase.length && typeof applyDerivedDemand === 'function' && typeof runMRP === 'function') {
-        const dsWithDem = applyDerivedDemand(dsBase, dsDemByMonth);
-        const dsMeta   = getMeta('Drug Substance');
-        const dsFull   = runMRP(dsWithDem, 100, dsMeta, dsBase.length, 'Drug Substance');
-        dsRows = dsFull.slice(0, viewRows.length);
+        const dsWithDem = applyDerivedDemand(dsBase, dsAgg);
+        const dsFull = runMRP(dsWithDem, 100, getMeta('Drug Substance'), dsBase.length, 'Drug Substance');
+        const dsByMonth = {};
+        dsFull.forEach(r => { dsByMonth[r.month] = r; });
+        dsRows = viewRows.map(vr => dsByMonth[vr.month] || { month: vr.month, ei: 0, prod: 0 });
       }
     }
   } catch (e) { console.warn('Combined Pool — DS chart compute failed:', e); }
 
   if (dsRows.length) {
-    const dsInvD  = dsRows.map(r => r.ei);
-    const dsProdD = dsRows.map(r => r.prod);
+    const dsInvD  = dsRows.map(r => r.ei || 0);
+    const dsProdD = dsRows.map(r => r.prod || 0);
     const dsDemD  = viewRows.map(r => dsDemByMonth[r.month] || 0);
 
     // Binding window for DS = 18 months from today (user-specified). DS
@@ -8964,7 +8975,7 @@ function runCombinedPoolTab() {
     const dsSupLabel = dsActive ? dsActive.supplier : 'Drug Substance';
 
     const dsTitle = document.getElementById('cpool-ds-title');
-    if (dsTitle) dsTitle.textContent = `Drug Substance (${dsSupLabel}) — Inventory + Production with Safety Stock — driven by ${dpProd}`;
+    if (dsTitle) dsTitle.textContent = `Drug Substance (${dsSupLabel}) — Inventory + Production with Safety Stock`;
 
     destroyChart('cpool-chart-ds');
     charts['cpool-chart-ds'] = new Chart(document.getElementById('cpool-chart-ds'), {
