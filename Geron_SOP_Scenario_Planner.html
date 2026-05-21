@@ -8872,10 +8872,16 @@ function runCombinedPoolTab() {
                   (PROD_INPUTS.find(p => p.product === lpProd)?.binding_through || null) : null;
   const dpBT    = (typeof PROD_INPUTS !== 'undefined') ?
                   (PROD_INPUTS.find(p => p.product === dpProd)?.binding_through || null) : null;
-  const lpInvD  = viewRows.map(r => r.lpEI);
-  const dpInvD  = viewRows.map(r => r.dpEI);
-  const lpProdD = viewRows.map(r => r.lpProd);
-  const dpProdD = viewRows.map(r => r.dpProd);
+  // De-double-count: ending inventory (EI) already includes this month's
+  // production, so stacking Production on top of Inventory would count it
+  // twice. Split each tier's EI into a "carried" portion (EI − production)
+  // and the production increment, so the two segments stack back to exactly
+  // EI. Production is capped at EI for the rare month where most of it was
+  // consumed/packaged the same month it was made.
+  const lpProdD = viewRows.map(r => Math.min(Math.max(0, r.lpProd || 0), Math.max(0, r.lpEI || 0)));
+  const lpInvD  = viewRows.map((r,i) => Math.max(0, (r.lpEI || 0) - lpProdD[i]));
+  const dpProdD = viewRows.map(r => Math.min(Math.max(0, r.dpProd || 0), Math.max(0, r.dpEI || 0)));
+  const dpInvD  = viewRows.map((r,i) => Math.max(0, (r.dpEI || 0) - dpProdD[i]));
   const demandD = viewRows.map(r => r.demand);
   // Palette-aligned fills (CSS vars resolved at runtime). Production
   // segments use Geron-blue / purple inside the binding window and green
@@ -9000,8 +9006,10 @@ function runCombinedPoolTab() {
   } catch (e) { console.warn('Combined Pool — DS chart compute failed:', e); }
 
   if (dsRows.length) {
-    const dsInvD  = dsRows.map(r => r.ei || 0);
-    const dsProdD = dsRows.map(r => r.prod || 0);
+    // De-double-count: DS EI already includes DS production, so split EI into
+    // carried inventory (EI − prod) + production increment, stacking back to EI.
+    const dsProdD = dsRows.map(r => Math.min(Math.max(0, r.prod || 0), Math.max(0, r.ei || 0)));
+    const dsInvD  = dsRows.map((r,i) => Math.max(0, (r.ei || 0) - dsProdD[i]));
     const dsDemD  = viewRows.map(r => dsDemByMonth[r.month] || 0);
 
     // Binding window for DS = 18 months from today (user-specified). DS
