@@ -8768,9 +8768,34 @@ function runCombinedPoolTab() {
     const moh    = avgFuture > 0 ? poolEI / avgFuture : (poolEI > 0 ? 999 : 0);
     const risk   = riskClass(moh, { target_moh: tgtMOH, critical_moh: critMOH, overstock_moh: overstockMOH });
 
-    // Per-tier EI tracking for the stacked-bar chart. See loop preamble.
-    const lpEI = Math.max(lpRunningEI - demand + lpProdAmt, 0);
-    const dpEI = Math.max(dpRunningEI + dpProdAmt - lpProdAmt, 0);
+    // ── Per-tier EI tracking for the stacked-bar chart ───────────────────
+    // The pool nets LP+DP into one bucket, but the chart shows the two tiers
+    // separately, so we model the physical flow:
+    //   DP produced  → grows DP inventory
+    //   DP packaged into LP (just-in-time to meet demand the committed LP
+    //     production can't cover) → moves units DP → LP
+    //   LP demand    → depletes LP inventory
+    // Without the JIT packaging step, DP piles up forever (nothing converts
+    // it) and LP sits at zero — which is exactly the "DP doesn't move /
+    // FDP empty" artifact. Packaging is demand-pull: only what's needed to
+    // satisfy demand beyond committed LP production gets converted, so a DP
+    // production spike (e.g. an Aug-2028 Simtra release) shows DP jump, then
+    // draw back down month by month as demand packages it forward.
+    const lpAvail = lpRunningEI + lpProdAmt;     // LP on hand + committed packaging
+    const dpAvail = dpRunningEI + dpProdAmt;     // DP on hand + this month's DP production
+    let lpEI, dpEI;
+    if (lpAvail >= demand) {
+      // Committed LP covers demand outright — no packaging needed this month.
+      lpEI = lpAvail - demand;
+      dpEI = dpAvail;
+    } else {
+      // Package DP → LP to cover the shortfall (capped by DP on hand).
+      const shortfall = demand - lpAvail;
+      const packaged  = Math.min(dpAvail, shortfall);
+      lpEI = 0;                                  // LP fully consumed by demand
+      dpEI = Math.max(dpAvail - packaged, 0);    // DP drawn down by packaging
+    }
+    lpEI = Math.max(lpEI, 0);
     lpRunningEI = lpEI;
     dpRunningEI = dpEI;
 
