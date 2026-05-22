@@ -428,6 +428,11 @@
   <div class="sidebar" id="sidebar">
     <div class="sidebar-resize-handle" id="sidebar-resize"></div>
 
+    <!-- Base Plan governance hint — shown only while viewing the Base Plan -->
+    <div id="base-plan-hint" style="display:none;margin:0 0 10px;padding:8px 10px;border-left:3px solid var(--gold);background:rgba(255,163,0,0.10);border-radius:4px;font-size:11px;color:var(--navy);line-height:1.4;">
+      <b>Viewing the Base Plan.</b> Scenario levers (sales factor, supply mode) and overrides are inputs to a <i>scenario</i> — switch to <b>Scenario</b> in the header to model changes. Master data stays editable.
+    </div>
+
     <!-- VIEW WINDOW -->
     <div class="section" draggable="true" data-section-id="view-window">
       <div class="section-header" onclick="toggleSection(this)"><span class="drag-handle" title="Drag to reorder">⠿</span> 
@@ -2078,6 +2083,7 @@ function _persistAllocOverrides() {
   try { localStorage.setItem('geron_alloc_overrides', JSON.stringify(allocationOverrides)); } catch (e) {}
 }
 function setAllocationOverride(product, month, childMonth) {
+  if (typeof _scenarioEditGuard === 'function' && !_scenarioEditGuard()) return;
   if (!allocationOverrides[product]) allocationOverrides[product] = {};
   if (!childMonth) {
     delete allocationOverrides[product][month];
@@ -2109,6 +2115,7 @@ function getAllocationOverride(product, month) {
 // an override-only month added via "+ Add batch"), we synthesize a
 // minimal row so the routing persists through the next runScenario.
 function setRowSupplier(product, month, supplier) {
+  if (typeof _scenarioEditGuard === 'function' && !_scenarioEditGuard()) return;
   if (typeof PROD_DATA !== 'object' || !Array.isArray(PROD_DATA)) return;
   let row = PROD_DATA.find(r => r.product === product && r.month === month);
   if (!row) {
@@ -2388,6 +2395,7 @@ function isProdCancelled(product, monthIso) {
 }
 
 function setProdOverride(product, month, batches) {
+  if (typeof _scenarioEditGuard === 'function' && !_scenarioEditGuard()) return;
   if (!prodOverrides[product]) prodOverrides[product] = {};
   prodOverrides[product][month] = batches;
   // Persist immediately so the scenario edit survives a reload. Master
@@ -3327,6 +3335,31 @@ function _syncPlanModeUI() {
   if (cmp) cmp.style.display = base ? 'none' : 'inline-flex';
   const badge = document.getElementById('active-scenario-badge');
   if (badge) badge.textContent = base ? 'Base Plan' : 'Scenario';
+
+  // Governance: on the Base Plan, lock the scenario-lever sidebar sections
+  // (sales factor, supply mode) so they can't perturb the base. Master data
+  // sections stay fully editable. The override write-paths are separately
+  // guarded by _scenarioEditGuard().
+  const hint = document.getElementById('base-plan-hint');
+  if (hint) hint.style.display = base ? 'block' : 'none';
+  ['demand-scenario', 'supply-mode'].forEach(id => {
+    const body = document.querySelector(`.section[data-section-id="${id}"] .section-body`);
+    if (body) {
+      body.style.opacity = base ? '0.45' : '';
+      body.style.pointerEvents = base ? 'none' : '';
+    }
+  });
+}
+
+// Edit guard for scenario-only writes (production overrides, allocation
+// overrides, per-row supplier routing). On the Base Plan these are blocked;
+// the user is offered a one-click switch into Scenario mode so the base
+// stays pristine. Returns true if the edit may proceed.
+function _scenarioEditGuard() {
+  if (!isBasePlan()) return true;
+  const ok = confirm('You’re viewing the Base Plan, which stays clean of overrides.\n\nSwitch to Scenario mode to make this change?');
+  if (ok) { setPlanMode('scenario'); return true; }
+  return false;
 }
 
 // Plan-aware dataset filter for charts. Tag each Chart.js dataset with a
