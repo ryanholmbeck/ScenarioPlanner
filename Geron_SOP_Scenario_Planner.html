@@ -843,22 +843,7 @@
         <div class="card-header"><div class="card-title" id="title-prod-table">Production Schedule Table</div></div>
         <div class="table-wrap">
           <table id="tbl-production">
-            <thead>
-              <tr>
-                <th data-tip="Calendar month for this row">Month</th>
-                <th data-tip="Base: number of full batches scheduled
-From the current production plan">Base Prod (batches)</th><th id="prod-tbl-th-base-units" data-tip="Base: units produced
-Batches × batch size (baseline)">Base Prod (units)</th>
-                <th data-tip="Scenario: number of batches
-MRP-calculated for this scenario demand level">Scen Prod (batches)</th><th id="prod-tbl-th-scen-units" data-tip="Scenario: units produced
-Batches × batch size (scenario)">Scen Prod (units)</th>
-                <th id="companion-prod-col-h" style="display:none;" data-tip="Companion product production (combine mode only)">Companion Prod</th>
-                <th data-tip="Batch delta
-Scenario batches minus Base batches">Δ Batches</th><th id="prod-tbl-th-delta-units" data-tip="Unit delta
-Scenario units minus Base units">Δ Units</th><th data-tip="Release Month
-Month inventory becomes available after lead time">Release Month</th>
-              </tr>
-            </thead>
+            <thead id="tbl-production-head"></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -4441,54 +4426,62 @@ function updateProductionTab(product, baseRows, scenRows, meta) {
 
   const bSize = meta.batch_size || 1;
   const unit  = (meta && meta.unit) || 'units';
-  const tbody = document.querySelector('#tbl-production tbody');
-  tbody.innerHTML = '';
-
-  // Re-label the column headers with the spotlight product's unit so DS
-  // shows "(kg)" and LP/DP show "(units)". Headers also lose the hardcoded
-  // "Δ Units" → "Δ <unit>" for the same reason.
   const _unitCap = unit.charAt(0).toUpperCase() + unit.slice(1);
-  const _thA = document.getElementById('prod-tbl-th-base-units');
-  if (_thA) _thA.textContent = `Base Prod (${unit})`;
-  const _thB = document.getElementById('prod-tbl-th-scen-units');
-  if (_thB) _thB.textContent = `Scen Prod (${unit})`;
-  const _thC = document.getElementById('prod-tbl-th-delta-units');
-  if (_thC) _thC.textContent = `Δ ${_unitCap}`;
-
-  // Toggle companion column visibility
+  const compare = isComparing();
   const combineActive = window._combineActive || false;
   const compScenRowsLocal = window._compScenRows || [];
   const companionLabel = window._companionProduct || '';
-  const compColHeader = document.getElementById('companion-prod-col-h');
-  if (compColHeader) {
-    compColHeader.textContent = combineActive ? `${companionLabel} Prod (${unit})` : `Companion Prod (${unit})`;
-    compColHeader.style.display = combineActive ? '' : 'none';
-  }
-  // Hide/show all cells in companion column
-  const tblHead = document.querySelector('#tbl-production thead tr');
-  const companionColIdx = 5; // 0-based index of companion col
+  const compColHdr = combineActive
+    ? `<th>${companionLabel} Prod (${unit})</th>` : '';
 
+  // ── Plan-aware header + rows ──────────────────────────────────────────
+  // Base Plan / Scenario (no compare): one clean block (batches + units).
+  // Compare: full Base + Scenario + Δ.
+  const thead = document.getElementById('tbl-production-head');
+  if (thead) {
+    thead.innerHTML = compare
+      ? `<tr><th>Month</th>
+           <th>Base Prod (batches)</th><th>Base Prod (${unit})</th>
+           <th>Scen Prod (batches)</th><th>Scen Prod (${unit})</th>
+           ${compColHdr}
+           <th>Δ Batches</th><th>Δ ${_unitCap}</th><th>Release Month</th></tr>`
+      : `<tr><th>Month</th><th>Prod (batches)</th><th>Prod (${unit})</th>${compColHdr}<th>Release Month</th></tr>`;
+  }
+
+  const tbody = document.querySelector('#tbl-production tbody');
+  tbody.innerHTML = '';
   for (let i = 0; i < horizon; i++) {
     const b = baseRows[i], s = scenRows[i];
     if (!b || !s) continue;
-    const dB = Math.round(s.prod/bSize) - Math.round(b.prod/bSize);
-    const dU = s.prod - b.prod;
     const compProd = combineActive && compScenRowsLocal[i] ? (compScenRowsLocal[i].prod || 0) : null;
-    const compCell = compProd !== null
-      ? `<td style="color:var(--muted);font-style:italic;">${compProd > 0 ? fmtQty(compProd,meta) : '—'}</td>`
-      : `<td style="display:none;"></td>`;
+    const compCell = combineActive
+      ? `<td style="color:var(--muted);font-style:italic;">${compProd > 0 ? fmtQty(compProd,meta) : '—'}</td>` : '';
     const cancelBadge = s.cancelled
       ? ' <span style="font-size:9px;font-weight:700;background:#dc2626;color:#fff;border-radius:3px;padding:1px 5px;">CANCELLED</span>'
       : '';
-    tbody.innerHTML += `<tr>
-      <td>${monthLabel(b.month)}</td>
-      <td>${fmt(Math.round(b.prod/bSize))}</td><td>${fmtQty(b.prod,meta)}</td>
-      <td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmt(Math.round(s.prod/bSize))}</td><td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmtQty(s.prod,meta)}${cancelBadge}</td>
-      ${compCell}
-      <td class="${dB>0?'diff-pos':dB<0?'diff-neg':'diff-neu'}">${dB>0?'+':''}${dB}</td>
-      <td class="${dU>0?'diff-pos':dU<0?'diff-neg':'diff-neu'}">${dU>0?'+':''}${fmtQty(dU,meta)}</td>
-      <td>${monthLabel(b.rm || b.month)}</td>
-    </tr>`;
+    if (compare) {
+      const dB = Math.round(s.prod/bSize) - Math.round(b.prod/bSize);
+      const dU = s.prod - b.prod;
+      tbody.innerHTML += `<tr>
+        <td>${monthLabel(b.month)}</td>
+        <td>${fmt(Math.round(b.prod/bSize))}</td><td>${fmtQty(b.prod,meta)}</td>
+        <td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmt(Math.round(s.prod/bSize))}</td><td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmtQty(s.prod,meta)}${cancelBadge}</td>
+        ${compCell}
+        <td class="${dB>0?'diff-pos':dB<0?'diff-neg':'diff-neu'}">${dB>0?'+':''}${dB}</td>
+        <td class="${dU>0?'diff-pos':dU<0?'diff-neg':'diff-neu'}">${dU>0?'+':''}${fmtQty(dU,meta)}</td>
+        <td>${monthLabel(b.rm || b.month)}</td>
+      </tr>`;
+    } else {
+      const r = isBasePlan() ? b : s;
+      const cb = (!isBasePlan() && r.cancelled) ? cancelBadge : '';
+      const cancelStyle = (!isBasePlan() && r.cancelled) ? ' style="color:#dc2626;font-weight:600;"' : '';
+      tbody.innerHTML += `<tr>
+        <td>${monthLabel(r.month)}</td>
+        <td${cancelStyle}>${fmt(Math.round(r.prod/bSize))}</td><td${cancelStyle}>${fmtQty(r.prod,meta)}${cb}</td>
+        ${compCell}
+        <td>${monthLabel(r.rm || r.month)}</td>
+      </tr>`;
+    }
   }
   // Re-render override table so it stays in sync with base schedule
   renderProdOverrideTable();
