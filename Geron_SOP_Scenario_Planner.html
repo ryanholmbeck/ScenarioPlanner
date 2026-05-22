@@ -3365,20 +3365,23 @@ function planDatasets(datasets) {
     const role = ds._role;
     if (!role) { out.push(ds); continue; }
     if (role === 'neutral') { out.push(ds); continue; }
+    // _keepLabel datasets (e.g. a derived "Δ Value" line) keep their own
+    // label and only follow the show/drop rules of their role.
+    const keep = !!ds._keepLabel;
     if (base) {
-      if (role === 'base') { out.push(Object.assign({}, ds, { label: 'Plan' })); }
+      if (role === 'base') { out.push(Object.assign({}, ds, keep ? {} : { label: 'Plan' })); }
       // scenario datasets dropped in base mode
     } else if (cmp) {
-      if (role === 'scenario') { out.push(Object.assign({}, ds, { label: 'Scenario' })); }
+      if (role === 'scenario') { out.push(Object.assign({}, ds, keep ? {} : { label: 'Scenario' })); }
       else if (role === 'base') {
         out.push(Object.assign({}, ds, {
-          label: 'Base — reference', borderDash: [4,4],
+          label: keep ? ds.label : 'Base — reference', borderDash: [4,4],
           borderColor: 'rgba(120,140,160,0.7)', backgroundColor: 'rgba(120,140,160,0.7)',
           borderWidth: 1.5, pointRadius: 0,
         }));
       }
     } else {
-      if (role === 'scenario') { out.push(Object.assign({}, ds, { label: 'Plan' })); }
+      if (role === 'scenario') { out.push(Object.assign({}, ds, keep ? {} : { label: 'Plan' })); }
       // base dataset dropped when not comparing
     }
   }
@@ -4076,10 +4079,10 @@ function updateDemandTab(product, baseRows, scenRows, salesFactor) {
       type: 'bar',
       data: {
         labels: qLabels,
-        datasets: [
-          { label:'Base', data:qBase, backgroundColor:'rgba(0,59,92,0.7)', borderRadius:3 },
-          { label:'Scenario', data:qScen, backgroundColor:'rgba(255,163,0,0.7)', borderRadius:3 },
-        ],
+        datasets: planDatasets([
+          { _role:'base',     label:'Base', data:qBase, backgroundColor:'rgba(0,59,92,0.7)', borderRadius:3 },
+          { _role:'scenario', label:'Scenario', data:qScen, backgroundColor:'rgba(255,163,0,0.7)', borderRadius:3 },
+        ]),
       },
       options: { responsive:true, maintainAspectRatio:false,
         plugins:{ legend:{position:'top',labels:{font:{size:11}}} },
@@ -4108,7 +4111,9 @@ function updateDemandTab(product, baseRows, scenRows, salesFactor) {
       return true;
     })
 
-  const sf = salesFactor / 100;
+  // Base Plan ignores the sales-factor lever, so the stream/mix breakdowns
+  // show unfactored base demand. Scenario mode applies it.
+  const sf = (isBasePlan() ? 100 : salesFactor) / 100;
   // Use view window to limit stream data (same as other charts)
   const viewLen = baseRows.length;  // already sliced to view window by runScenario
   const streamMonths = streamData.length ? streamData[0][1].slice(0, viewLen).map(r => r.m) : [];
@@ -4458,10 +4463,10 @@ function updateBudgetTab(product, baseRows, scenRows) {
       type: 'bar',
       data: {
         labels,
-        datasets: [
-          { label:'Base Spend', data:base, backgroundColor:'rgba(0,59,92,0.65)', borderRadius:3 },
-          { label:'Scenario Spend', data:scen, backgroundColor:'rgba(255,163,0,0.65)', borderRadius:3 },
-        ],
+        datasets: planDatasets([
+          { _role:'base',     label:'Base Spend', data:base, backgroundColor:'rgba(0,59,92,0.65)', borderRadius:3 },
+          { _role:'scenario', label:'Scenario Spend', data:scen, backgroundColor:'rgba(255,163,0,0.65)', borderRadius:3 },
+        ]),
       },
       options: { responsive:true, maintainAspectRatio:false,
         plugins:{
@@ -6646,15 +6651,15 @@ function updateValuationTab(product, baseRows, scenRows) {
       type: 'bar',
       data: {
         labels,
-        datasets: [
-          { label:'Base Holding Value', data: baseVal,
+        datasets: planDatasets([
+          { _role:'base', label:'Base Holding Value', data: baseVal,
             backgroundColor:'rgba(0,59,92,0.55)', borderRadius:3 },
-          { label:'Scenario Holding Value', data: scenVal,
+          { _role:'scenario', label:'Scenario Holding Value', data: scenVal,
             backgroundColor:'rgba(255,163,0,0.55)', borderRadius:3 },
-          { label:'Δ Value', data: delta, type:'line',
+          { _role:'scenario', _keepLabel:true, label:'Δ Value', data: delta, type:'line',
             borderColor:'rgba(26,122,64,0.85)', borderWidth:2,
             pointRadius:0, fill:false, yAxisID:'y2' },
-        ],
+        ]),
       },
       options: {
         responsive:true, maintainAspectRatio:false,
