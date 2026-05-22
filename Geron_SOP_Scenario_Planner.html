@@ -828,26 +828,7 @@
         <div class="card-header"><div class="card-title" id="title-inv-table">Inventory Detail Table</div></div>
         <div class="table-wrap">
           <table id="tbl-inventory">
-            <thead>
-              <tr>
-                <th data-tip="Calendar month for this row">Month</th>
-                <th data-tip="Base: Beginning Inventory
-Opening stock this month under the baseline forecast">Base BI</th><th data-tip="Base: Demand (units)
-Forecast demand this month — baseline scenario">Base Demand</th><th data-tip="Base: Planned Production
-Scheduled production arriving this month — baseline">Base Prod</th><th data-tip="Base: Ending Inventory
-= BI + Production − Demand (baseline)">Base EI</th><th data-tip="Base: Months of Hand
-Ending Inventory ÷ Avg Future Demand (baseline)">Base MOH</th>
-                <th data-tip="Scenario: Beginning Inventory
-Opening stock this month under the active scenario">Scen BI</th><th data-tip="Scenario: Demand (units)
-Adjusted demand after applying sales factor or custom upload">Scen Demand</th><th data-tip="Scenario: Planned Production
-Production scheduled by the MRP engine for this scenario">Scen Prod</th><th data-tip="Scenario: Ending Inventory
-= BI + Production − Demand (scenario)">Scen EI</th><th data-tip="Scenario: Months on Hand
-Ending Inventory ÷ Avg Future Demand (scenario)">Scen MOH</th>
-                <th data-tip="Ending Inventory Delta
-Scenario EI minus Base EI. Negative = scenario holds less stock">EI Δ</th><th data-tip="Inventory Risk Status
-Based on scenario MOH vs target and critical thresholds">Risk</th>
-              </tr>
-            </thead>
+            <thead id="tbl-inventory-head"></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -3879,11 +3860,20 @@ function runScenario() {
 function kpiCard(label, baseVal, scenVal, fmt_fn, suffix='', metricKey='') {
   const bv = fmt_fn(baseVal);
   const sv = fmt_fn(scenVal);
+  const clickAttr = metricKey ? ` onclick="openKpiDrill('${metricKey}')" title="Click for month-by-month detail"` : '';
+  // Plan-aware: a single clean value on the active plan; the Base sub-line
+  // and Δ only appear when comparing.
+  if (!isComparing()) {
+    const val = isBasePlan() ? bv : sv;
+    return `<div class="kpi-card"${clickAttr}>
+      <div class="kpi-label">${label}</div>
+      <div class="kpi-val">${val}${suffix}</div>
+    </div>`;
+  }
   const delta = scenVal - baseVal;
   const pct   = baseVal !== 0 ? (delta / Math.abs(baseVal) * 100).toFixed(1) : 0;
   const cls   = delta > 0 ? 'pos' : delta < 0 ? 'neg' : 'neu';
   const sign  = delta > 0 ? '+' : '';
-  const clickAttr = metricKey ? ` onclick="openKpiDrill('${metricKey}')" title="Click for month-by-month detail"` : '';
   return `<div class="kpi-card"${clickAttr}>
     <div class="kpi-label">${label}</div>
     <div class="kpi-base">Base: ${bv}${suffix}</div>
@@ -4037,20 +4027,42 @@ function updateInventoryTab(product, baseRows, scenRows, meta) {
     }
   );
 
-  // Table
+  // ── Detail table — plan-aware columns ─────────────────────────────────
+  // Base Plan / Scenario (no compare): one clean set of columns for the
+  // active plan. Compare mode: full Base + Scenario + Δ columns.
+  const compare = isComparing();
+  const thead = document.getElementById('tbl-inventory-head');
+  if (thead) {
+    thead.innerHTML = compare
+      ? `<tr><th>Month</th>
+           <th>Base BI</th><th>Base Demand</th><th>Base Prod</th><th>Base EI</th><th>Base MOH</th>
+           <th>Scen BI</th><th>Scen Demand</th><th>Scen Prod</th><th>Scen EI</th><th>Scen MOH</th>
+           <th>EI Δ</th><th>Risk</th></tr>`
+      : `<tr><th>Month</th><th>BI</th><th>Demand</th><th>Prod</th><th>EI</th><th>MOH</th><th>Risk</th></tr>`;
+  }
   const tbody = document.querySelector('#tbl-inventory tbody');
   tbody.innerHTML = '';
   for (let i = 0; i < horizon; i++) {
     const b = baseRows[i], s = scenRows[i];
-    const dEI = s.ei - b.ei;
     const rCls = `risk-${s.risk}`;
-    tbody.innerHTML += `<tr>
-      <td>${monthLabel(b.month)}</td>
-      <td>${fmtQty(b.bi,meta)}</td><td>${fmtQty(b.demand,meta)}</td><td>${fmtQty(b.prod,meta)}</td><td>${fmtQty(b.ei,meta)}</td><td>${fmt(b.moh,1)}</td>
-      <td>${fmtQty(s.bi,meta)}</td><td>${fmtQty(s.demand,meta)}</td><td>${fmtQty(s.prod,meta)}</td><td>${fmtQty(s.ei,meta)}</td><td>${fmt(s.moh,1)}</td>
-      <td class="${dEI>0?'diff-pos':dEI<0?'diff-neg':'diff-neu'}">${dEI>0?'+':''}${fmtQty(dEI,meta)}</td>
-      <td class="${rCls}"><span class="status-pill status-${s.risk}">${s.risk}</span></td>
-    </tr>`;
+    if (compare) {
+      const dEI = s.ei - b.ei;
+      tbody.innerHTML += `<tr>
+        <td>${monthLabel(b.month)}</td>
+        <td>${fmtQty(b.bi,meta)}</td><td>${fmtQty(b.demand,meta)}</td><td>${fmtQty(b.prod,meta)}</td><td>${fmtQty(b.ei,meta)}</td><td>${fmt(b.moh,1)}</td>
+        <td>${fmtQty(s.bi,meta)}</td><td>${fmtQty(s.demand,meta)}</td><td>${fmtQty(s.prod,meta)}</td><td>${fmtQty(s.ei,meta)}</td><td>${fmt(s.moh,1)}</td>
+        <td class="${dEI>0?'diff-pos':dEI<0?'diff-neg':'diff-neu'}">${dEI>0?'+':''}${fmtQty(dEI,meta)}</td>
+        <td class="${rCls}"><span class="status-pill status-${s.risk}">${s.risk}</span></td>
+      </tr>`;
+    } else {
+      // Active plan = base in Base Plan mode, scenario otherwise.
+      const r = isBasePlan() ? b : s;
+      tbody.innerHTML += `<tr>
+        <td>${monthLabel(r.month)}</td>
+        <td>${fmtQty(r.bi,meta)}</td><td>${fmtQty(r.demand,meta)}</td><td>${fmtQty(r.prod,meta)}</td><td>${fmtQty(r.ei,meta)}</td><td>${fmt(r.moh,1)}</td>
+        <td class="${rCls}"><span class="status-pill status-${r.risk}">${r.risk}</span></td>
+      </tr>`;
+    }
   }
 }
 
