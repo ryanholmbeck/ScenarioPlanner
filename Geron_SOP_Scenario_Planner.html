@@ -74,8 +74,12 @@
   body.dark-mode .card-title { color: #93c5fd; }
   body.dark-mode .card-subtitle { color: #9ca3af; }
   body.dark-mode .val-display { color: #93c5fd; }
-  body.dark-mode .kpi-value { color: #f3f4f6; }
+  body.dark-mode .kpi-value, body.dark-mode .kpi-val { color: #f3f4f6; }
+  body.dark-mode .kpi-base { color: #9ca3af; }
   body.dark-mode .kpi-label { color: #9ca3af; }
+  body.dark-mode .card { box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+  body.dark-mode .kpi-card { box-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+  body.dark-mode tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
   body.dark-mode .kpi-sub { color: #6b7280; }
   body.dark-mode label { color: #9ca3af; }
   body.dark-mode .scenario-name { color: #e5e7eb; }
@@ -113,7 +117,11 @@
   .drag-handle:hover { opacity: 1; }
   .section.dragging { opacity: 0.4; }
   .section.drag-over { border-top: 3px solid var(--gold); }
-  body { font-family: 'Segoe UI', Arial, sans-serif; background: var(--bg); color: var(--text); font-size: 13px; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background: var(--bg); color: var(--text); font-size: 13px;
+    -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  /* Numbers align cleanly in tables, KPIs, and charts axes. */
+  .kpi-val, .kpi-base, .kpi-delta, table td, table th, #tbl-inventory td, #tbl-production td { font-variant-numeric: tabular-nums; }
 
   /* ── HEADER ── */
   .header {
@@ -211,17 +219,19 @@
   .upload-area input[type=file] { display: none; }
 
   /* ── CARDS ── */
-  .card { background: var(--card); border-radius: 8px; border: 1px solid var(--border);
-    padding: 14px; margin-bottom: 14px; }
-  .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-  .card-title { font-size: 13px; font-weight: 700; color: var(--navy); }
-  .card-subtitle { font-size: 11px; color: var(--muted); }
+  .card { background: var(--card); border-radius: 10px; border: 1px solid var(--border);
+    padding: 16px 18px; margin-bottom: 14px;
+    box-shadow: 0 1px 2px rgba(0,59,92,0.05), 0 1px 3px rgba(0,59,92,0.04); }
+  .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 12px; }
+  .card-title { font-size: 14px; font-weight: 700; color: var(--navy); letter-spacing: -0.01em; }
+  .card-subtitle { font-size: 11px; color: var(--muted); line-height: 1.45; margin-top: 2px; }
 
   /* ── KPI ROW ── */
-  .kpi-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-bottom: 14px; }
-  .kpi-card { background: var(--card); border-radius: 6px; border: 1px solid var(--border); padding: 10px 12px;
-    cursor: pointer; transition: box-shadow 0.15s, border-color 0.15s; }
-  .kpi-card:hover { box-shadow: 0 2px 10px rgba(0,59,92,0.15); border-color: var(--gold); }
+  .kpi-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .kpi-card { background: var(--card); border-radius: 10px; border: 1px solid var(--border); padding: 12px 14px;
+    cursor: pointer; transition: box-shadow 0.15s, border-color 0.15s, transform 0.1s;
+    box-shadow: 0 1px 2px rgba(0,59,92,0.05); }
+  .kpi-card:hover { box-shadow: 0 4px 14px rgba(0,59,92,0.13); border-color: var(--gold); transform: translateY(-1px); }
 
   /* ── KPI DRILL MODAL ── */
   #kpi-drill-overlay {
@@ -258,9 +268,9 @@
   #kpi-drill-body .delta-pos { color: #15803d; font-weight: 700; }
   #kpi-drill-body .delta-neg { color: #b91c1c; font-weight: 700; }
   #kpi-drill-body .delta-neu { color: var(--muted); }
-  .kpi-label { font-size: 10px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .kpi-label { font-size: 10px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; }
   .kpi-base { font-size: 11px; color: var(--muted); margin-top: 1px; }
-  .kpi-val { font-size: 18px; font-weight: 700; color: var(--navy); }
+  .kpi-val { font-size: 21px; font-weight: 800; color: var(--navy); letter-spacing: -0.02em; margin-top: 3px; }
   .kpi-val.up { color: var(--green); }
   .kpi-val.down { color: var(--red); }
   .kpi-delta { font-size: 11px; font-weight: 600; margin-top: 2px; }
@@ -277,11 +287,12 @@
 
   /* ── TABS ── */
   .tab-bar { display: flex; gap: 2px; border-bottom: 2px solid var(--border); margin-bottom: 14px; flex-wrap: wrap; align-items: flex-end; }
-  .tab { padding: 8px 14px; font-size: 12px; font-weight: 600; cursor: pointer;
-    color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -2px;
-    white-space: nowrap; user-select: none; display: flex; align-items: center; gap: 4px; position: relative; }
+  .tab { padding: 9px 15px; font-size: 12px; font-weight: 600; cursor: pointer;
+    color: var(--muted); border-bottom: 2.5px solid transparent; margin-bottom: -2px;
+    white-space: nowrap; user-select: none; display: flex; align-items: center; gap: 5px; position: relative;
+    transition: color 0.12s, border-color 0.12s; }
   .tab.active { color: var(--navy); border-bottom-color: var(--gold); }
-  .tab:hover:not(.active) { color: var(--navy); }
+  .tab:hover:not(.active) { color: var(--navy); border-bottom-color: rgba(255,163,0,0.35); }
   .tab-content { display: none; }
   .tab-content.active { display: block; }
   /* Icon-only tab mode */
@@ -295,9 +306,11 @@
 
   /* ── TABLE ── */
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th { background: var(--navy); color: white; padding: 6px 8px; text-align: left;
-    font-size: 11px; font-weight: 600; white-space: nowrap; }
-  td { padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { background: var(--navy); color: white; padding: 7px 9px; text-align: left;
+    font-size: 11px; font-weight: 600; white-space: nowrap; letter-spacing: 0.02em;
+    position: sticky; top: 0; z-index: 1; }
+  td { padding: 6px 9px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  tr:nth-child(even) td { background: rgba(0,59,92,0.022); }
   tr:hover td { background: var(--gold-pale); }
   .risk-high { color: var(--red); font-weight: 700; }
   .risk-medium { color: var(--amber); font-weight: 700; }
