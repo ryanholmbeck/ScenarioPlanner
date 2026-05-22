@@ -8825,7 +8825,11 @@ function runCombinedPoolTab() {
   if (mainSF !== undefined) _syncCpoolSF(mainSF);
 
   const pair     = document.getElementById('cpool-pair')?.value || '188';
-  const sf       = parseInt(document.getElementById('sales-factor')?.value || 100) / 100;
+  // Base Plan: ignore the sales-factor lever (sf = 100%) and the override
+  // layer, so the Combined Pool reflects the clean base plan like every
+  // other tab. Scenario: full override-aware behavior.
+  const basePlan = (typeof isBasePlan === 'function') && isBasePlan();
+  const sf       = (basePlan ? 100 : parseInt(document.getElementById('sales-factor')?.value || 100)) / 100;
   // Single source of truth for horizon: the sidebar's Display-months
   // slider. The dedicated cpool-horizon input was removed so the cpool
   // tab follows the same x-axis range as every other chart.
@@ -8905,10 +8909,12 @@ function runCombinedPoolTab() {
     const lpCommitted = lpBase[i]?.prod || 0;
     const dpCommitted = dpBase[i]?.prod || 0;
 
-    // Effective production = override-aware. Shared with runMRP so a Cancel
-    // on the Production tab flows here too (and vice versa).
-    const lpEff = getEffectiveProd(lpProd, month, lpMeta.batch_size || 1, lpCommitted);
-    const dpEff = getEffectiveProd(dpProd, month, dpBatch,                 dpCommitted);
+    // Effective production = override-aware in Scenario mode; committed-only
+    // on the Base Plan (overrides are scenario constructs).
+    const lpEff = basePlan ? { units: lpCommitted, fromOverride: false, cancelled: false }
+                           : getEffectiveProd(lpProd, month, lpMeta.batch_size || 1, lpCommitted);
+    const dpEff = basePlan ? { units: dpCommitted, fromOverride: false, cancelled: false }
+                           : getEffectiveProd(dpProd, month, dpBatch, dpCommitted);
     let lpProdAmt = lpEff.units;
     let dpProdAmt = dpEff.units;
 
@@ -9153,7 +9159,8 @@ function runCombinedPoolTab() {
   let dsRows = [];
   let dsDemByMonth = {};
   try {
-    const casc = window.__cascade;
+    // Base Plan reads the base cascade; Scenario reads the scenario cascade.
+    const casc = (basePlan && window.__baseCascade) ? window.__baseCascade : window.__cascade;
     if (casc && casc.byProduct && Array.isArray(casc.byProduct['Drug Substance'])) {
       const dsByMonth = {};
       casc.byProduct['Drug Substance'].forEach(r => { dsByMonth[r.month] = r; });
