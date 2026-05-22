@@ -2792,12 +2792,18 @@ function _safeCeiling(x, sig) {
 //  Manual prodOverrides[product][monthIso] (units count, multiplied by
 //  active supplier's batch size) take precedence over MRP output.
 // ══════════════════════════════════════════════════════════════════════════════
-function runMRP(baseRows, salesFactor, meta, horizonMonths, product) {
+function runMRP(baseRows, salesFactor, meta, horizonMonths, product, opts) {
   const rows = baseRows.slice(0, horizonMonths);
   if (!rows.length) return [];
 
-  const runoutMode = document.getElementById('runout-mode')?.checked || false;
-  const suppressPostBinding = document.getElementById('suppress-post-binding')?.checked || false;
+  // Base mode: a pristine MRP run with NO scenario constructs — production
+  // overrides, runout mode, and suppress-post-binding are all ignored. This
+  // is what feeds the clean Base Plan / base cascade so the base view never
+  // inherits scenario edits. Scenario mode (default) keeps the existing
+  // override-aware behavior.
+  const baseMode = !!(opts && opts.base);
+  const runoutMode = baseMode ? false : (document.getElementById('runout-mode')?.checked || false);
+  const suppressPostBinding = baseMode ? false : (document.getElementById('suppress-post-binding')?.checked || false);
 
   // Binding cutoff for THIS product comes from the registry — use the
   // primary-active row's binding_mo. Fallback: meta.binding_through
@@ -2865,7 +2871,10 @@ function runMRP(baseRows, salesFactor, meta, horizonMonths, product) {
 
     // ── GATES (scenario-only) ──────────────────────────────────────────────
     let scenProd = batchQty;
-    const eff    = product ? getEffectiveProd(product, monthIso, batchSize, 0) : { units: 0, fromOverride: false, cancelled: false };
+    // Base mode never consults the override layer — it's a pure MRP run.
+    const eff = (!baseMode && product)
+      ? getEffectiveProd(product, monthIso, batchSize, 0)
+      : { units: 0, fromOverride: false, cancelled: false };
 
     if (runoutMode) {
       // Runout mode: no MRP at all; only manual overrides
@@ -3661,17 +3670,54 @@ function runScenario() {
 
     window.__cascade = cascade;
 
-    // ── Wire cascade-derived demand into the spotlight view ───────────────
-    // For non-LP cascade products (DP/DS/RM), the workbook-baked PROD_DATA.demand
-    // is a stale snapshot. Replace it with the live cascade so Inventory Detail,
-    // Demand, and KPI panels reflect the current LP/DP schedule + lead-time
-    // settings. Base view uses BASE-derived demand (no MRP); Scenario view uses
-    // the post-MRP cascade rows directly.
-    // DP spotlight intentionally not patched here: applyDPLeadTimeOffset already
-    // shifts DP demand from LP production, and rewriting the DP EI chain would
-    // be a broader change outside this task's scope. DS and RM tiers are where
-    // stale workbook-baked demand was causing user-visible drift (e.g. the
-    // 57-vs-25 DS Aug 2028 mismatch).
+    // ── BASE CASCADE ──────────────────────────────────────────────────────
+    // A parallel cascade computed in PURE BASE MODE: workbook demand, sales
+    // factor 100, and NO scenario constructs (no production overrides, no
+    // runout mode, no suppress-post-binding). This is the clean "what does
+    // the committed/forecast plan project" backbone — the spine of the Base
+    // Plan view. Cascade-product spotlights (DP/DS/RM) take their base view
+    // from here so base demand is CONTINUOUS (full LP→DP→DS→RM projection)
+    // and base EI is internally consistent — demand, MRP-scheduled
+    // production, and the EI chain all come from the same base run, instead
+    // of the old hybrid that bolted derived demand onto committed production
+    // (which made base EI drift).
+    const baseCascade = { byProduct: {}, demandByProduct: {} };
+    (function _buildBaseCascade() {
+      function _baseFor(prod) {
+        const baseR = getBaseRows(prod);
+        if (!baseR.length) return [];
+        return runMRP(baseR, 100, getMeta(prod), baseR.length, prod, { base: true });
+      }
+      for (const lp of lpProducts) {
+        if (typeof SUPPLIER_REGISTRY === 'undefined' || !SUPPLIER_REGISTRY[lp]) continue;
+        baseCascade.byProduct[lp] = _baseFor(lp);
+      }
+      function _aggB(parentProds, childProd) {
+        const combined = {};
+        for (const pp of parentProds) {
+          const partial = deriveChildDemand(pp, baseCascade.byProduct[pp] || [], childProd);
+          for (const [mo, qty] of Object.entries(partial)) combined[mo] = (combined[mo] || 0) + qty;
+        }
+        return combined;
+      }
+      function _runTierB(childProd, parentProds) {
+        const childBase = getBaseRows(childProd);
+        if (!childBase.length) return;
+        const derivedDem = _aggB(parentProds, childProd);
+        baseCascade.demandByProduct[childProd] = derivedDem;
+        baseCascade.byProduct[childProd] = runMRP(applyDerivedDemand(childBase, derivedDem), 100, getMeta(childProd), childBase.length, childProd, { base: true });
+      }
+      _runTierB('200mg DP', ['188mg LP', '188mg LP - EU Stock']);
+      _runTierB('50mg DP',  ['47mg LP',  '47mg LP - EU Stock']);
+      _runTierB('Drug Substance', ['200mg DP', '50mg DP']);
+      for (const rm of ['LLPS', 'APAD', 'APC', 'APG', 'APT']) _runTierB(rm, ['Drug Substance']);
+    })();
+    window.__baseCascade = baseCascade;
+
+    // ── Wire cascade demand into the spotlight view ───────────────────────
+    // DP spotlight intentionally not patched here: applyDPLeadTimeOffset
+    // already shifts DP demand from LP production. DS and RM tiers take both
+    // their base AND scenario series from the respective cascades.
     const _PARENTS_OF = {
       'Drug Substance': ['200mg DP', '50mg DP'],
       'LLPS': ['Drug Substance'],
@@ -3680,37 +3726,18 @@ function runScenario() {
       'APG':  ['Drug Substance'],
       'APT':  ['Drug Substance'],
     };
-    const _cascadeParents = _PARENTS_OF[product];
-    if (_cascadeParents) {
-      // Compute base-derived demand from non-MRP parent rows
-      const baseDerivedDem = {};
-      for (const pp of _cascadeParents) {
-        const pBase = getBaseRows(pp);
-        const partial = deriveChildDemand(pp, pBase, product);
-        for (const [mo, qty] of Object.entries(partial)) {
-          baseDerivedDem[mo] = (baseDerivedDem[mo] || 0) + qty;
-        }
+    if (_PARENTS_OF[product]) {
+      // BASE view: take the full base-cascade rows (continuous demand +
+      // MRP-scheduled production + coherent EI/MOH), aligned to the base
+      // display window by month so any display-only fields (ml, rm) survive.
+      const baseCasc = baseCascade.byProduct[product];
+      if (baseCasc && baseCasc.length) {
+        const byMonth = {};
+        baseCasc.forEach(r => { byMonth[r.month] = r; });
+        displayBRows = displayBRows.map(r => byMonth[r.month] ? { ...r, ...byMonth[r.month] } : { ...r, demand: 0, prod: 0 });
       }
-      // Patch base rows: replace demand, re-chain bi/ei, recompute MOH (12-mo
-      // forward avg, matching runMRP's avgFuture).
-      const patched = displayBRows.map(r => ({ ...r, demand: baseDerivedDem[r.month] || 0 }));
-      for (let i = 0; i < patched.length; i++) {
-        const bi = (i === 0) ? patched[0].bi : patched[i - 1].ei;
-        patched[i].bi = bi;
-        patched[i].ei = bi - (patched[i].demand || 0) + (patched[i].prod || 0);
-      }
-      for (let i = 0; i < patched.length; i++) {
-        let sum = 0, ct = 0;
-        for (let j = i + 1; j <= Math.min(i + 12, patched.length - 1); j++) {
-          sum += (patched[j].demand || 0); ct++;
-        }
-        const avg = ct > 0 ? sum / ct : (patched[i].demand || 0);
-        patched[i].moh = avg > 0 ? patched[i].ei / avg : (patched[i].ei > 0 ? 999 : 0);
-      }
-      displayBRows = patched;
-
-      // Scenario rows: use the post-MRP cascade output directly (already has
-      // derived demand + MRP-scheduled production + recomputed EI/MOH).
+      // SCENARIO view: scenario cascade rows directly (derived demand +
+      // MRP-scheduled production + recomputed EI/MOH).
       const scenCasc = cascade.byProduct[product];
       if (scenCasc && scenCasc.length) {
         displaySRows = scenCasc.slice(0, displaySRows.length);
