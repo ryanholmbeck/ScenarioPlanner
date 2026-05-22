@@ -398,7 +398,18 @@
     <div class="header-title">Scenario Planner</div>
   </div>
   <div style="display:flex;gap:10px;align-items:center;">
-    <span class="header-badge" id="active-scenario-badge">Base Case</span>
+    <!-- Plan context: which plan am I viewing. Base Plan = clean base
+         cascade (no overrides/levers); Scenario = override-aware view. -->
+    <div id="plan-mode-toggle" title="Switch between the clean Base Plan (committed/forecast, no overrides) and the Scenario view (your levers + overrides applied)."
+         style="display:inline-flex;border:1px solid rgba(255,255,255,0.35);border-radius:6px;overflow:hidden;font-size:11px;font-weight:700;">
+      <button id="planmode-base"     onclick="setPlanMode('base')"     style="padding:5px 12px;border:none;cursor:pointer;background:var(--gold);color:var(--navy);">Base Plan</button>
+      <button id="planmode-scenario" onclick="setPlanMode('scenario')" style="padding:5px 12px;border:none;cursor:pointer;background:transparent;color:#fff;">Scenario</button>
+    </div>
+    <label id="compare-base-wrap" title="Overlay the Base Plan as a faint reference on the scenario charts."
+           style="display:none;align-items:center;gap:5px;font-size:11px;color:#fff;cursor:pointer;">
+      <input type="checkbox" id="compare-base" onchange="setCompareMode(this.checked)"> Compare to Base
+    </label>
+    <span class="header-badge" id="active-scenario-badge">Base Plan</span>
     <span id="data-mode-badge" style="background:#05C3DD;color:#003B5C;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;"></span>
     <span style="font-size:10px;opacity:0.6;" id="planner-refresh-date">Last refreshed: May 14, 2026 at 12:10 PM</span>
     <button class="btn btn-gold btn-sm" onclick="exportPlanningData()">📊 Export Planning Data</button>
@@ -3292,6 +3303,88 @@ function updateProductTitles(product) {
 // ══════════════════════════════════════════════════════════════════════════════
 //  MAIN SCENARIO ENGINE
 // ══════════════════════════════════════════════════════════════════════════════
+//  PLAN CONTEXT (V4) — one clean plan at a time
+// ──────────────────────────────────────────────────────────────────────────────
+//  planMode = 'base'      → the clean Base Plan: base cascade, no overrides,
+//                           no scenario levers. The default landing view.
+//           = 'scenario'  → the override-aware scenario view (legacy behavior).
+//  compareMode             → in scenario mode, overlay the Base Plan as a faint
+//                            reference. Off by default so the working view is
+//                            crisp and single-plan.
+//  In base mode the scenario series shown everywhere == the base series, so
+//  the engine never lets scenario levers (sales factor, supply mode,
+//  overrides) leak into the Base Plan.
+// ══════════════════════════════════════════════════════════════════════════════
+let planMode = (function () {
+  try { return localStorage.getItem('geron_plan_mode') === 'scenario' ? 'scenario' : 'base'; }
+  catch (e) { return 'base'; }
+})();
+let compareMode = false;
+
+function isBasePlan()  { return planMode === 'base'; }
+function isComparing() { return planMode === 'scenario' && compareMode; }
+
+function setPlanMode(mode) {
+  planMode = (mode === 'scenario') ? 'scenario' : 'base';
+  try { localStorage.setItem('geron_plan_mode', planMode); } catch (e) {}
+  _syncPlanModeUI();
+  if (typeof runScenario === 'function') runScenario();
+  if (typeof runCombinedPoolTab === 'function') runCombinedPoolTab();
+}
+function setCompareMode(on) {
+  compareMode = !!on;
+  if (typeof runScenario === 'function') runScenario();
+  if (typeof runCombinedPoolTab === 'function') runCombinedPoolTab();
+}
+function _syncPlanModeUI() {
+  const base = isBasePlan();
+  const bBtn = document.getElementById('planmode-base');
+  const sBtn = document.getElementById('planmode-scenario');
+  if (bBtn) { bBtn.style.background = base ? 'var(--gold)' : 'transparent'; bBtn.style.color = base ? 'var(--navy)' : '#fff'; }
+  if (sBtn) { sBtn.style.background = !base ? 'var(--gold)' : 'transparent'; sBtn.style.color = !base ? 'var(--navy)' : '#fff'; }
+  const cmp = document.getElementById('compare-base-wrap');
+  if (cmp) cmp.style.display = base ? 'none' : 'inline-flex';
+  const badge = document.getElementById('active-scenario-badge');
+  if (badge) badge.textContent = base ? 'Base Plan' : 'Scenario';
+}
+
+// Plan-aware dataset filter for charts. Tag each Chart.js dataset with a
+// custom `_role`: 'base', 'scenario', or 'neutral' (reference lines like
+// critical/target that always show). Pass the array through this to get the
+// right datasets for the active plan context:
+//   • Base Plan         → base series only (relabeled "Plan") + neutral
+//   • Scenario, no comp → scenario series only (relabeled "Plan") + neutral
+//   • Scenario + compare→ scenario ("Scenario") + base ("Base — reference",
+//                         faint dashed) + neutral
+// Datasets without a _role pass through untouched.
+function planDatasets(datasets) {
+  const base = isBasePlan();
+  const cmp  = isComparing();
+  const out = [];
+  for (const ds of datasets) {
+    const role = ds._role;
+    if (!role) { out.push(ds); continue; }
+    if (role === 'neutral') { out.push(ds); continue; }
+    if (base) {
+      if (role === 'base') { out.push(Object.assign({}, ds, { label: 'Plan' })); }
+      // scenario datasets dropped in base mode
+    } else if (cmp) {
+      if (role === 'scenario') { out.push(Object.assign({}, ds, { label: 'Scenario' })); }
+      else if (role === 'base') {
+        out.push(Object.assign({}, ds, {
+          label: 'Base — reference', borderDash: [4,4],
+          borderColor: 'rgba(120,140,160,0.7)', backgroundColor: 'rgba(120,140,160,0.7)',
+          borderWidth: 1.5, pointRadius: 0,
+        }));
+      }
+    } else {
+      if (role === 'scenario') { out.push(Object.assign({}, ds, { label: 'Plan' })); }
+      // base dataset dropped when not comparing
+    }
+  }
+  return out;
+}
+
 // Cache for expiry tab controls that re-render without full re-run
 let baseRowsCache = [];
 let scenRowsCache = [];
@@ -3749,6 +3842,17 @@ function runScenario() {
     window.__cascade = null;
   }
 
+  // ── BASE PLAN gate ────────────────────────────────────────────────────
+  // In Base Plan mode the scenario series shown everywhere IS the base
+  // series — scenario levers (sales factor, supply mode, overrides) never
+  // leak into the Base Plan. The per-chart planDatasets() filter then
+  // collapses the duplicate to a single clean "Plan" line. Clone so the two
+  // arrays stay independent objects for any downstream mutation.
+  if (isBasePlan()) {
+    displaySRows = displayBRows.map(r => ({ ...r }));
+    scenRowsCache = displaySRows;
+  }
+
   updateKPIs(product, displayBRows, displaySRows, salesFactor, meta);
   updateInventoryTab(product, displayBRows, displaySRows, meta);
   updateDemandTab(product, displayBRows, displaySRows, salesFactor);
@@ -3896,10 +4000,10 @@ function updateInventoryTab(product, baseRows, scenRows, meta) {
       type: 'line',
       data: {
         labels,
-        datasets: [
-          { label:'Base EI', data:bEI, borderColor:'rgba(0,59,92,0.85)', borderWidth:2, pointRadius:0, fill:false },
-          { label:'Scen EI', data:sEI, borderColor:'rgba(255,163,0,0.9)', borderWidth:2, borderDash:[5,3], pointRadius:0, fill:false },
-        ],
+        datasets: planDatasets([
+          { _role:'base',     label:'Base EI', data:bEI, borderColor:'rgba(0,59,92,0.85)', borderWidth:2, pointRadius:0, fill:false },
+          { _role:'scenario', label:'Scen EI', data:sEI, borderColor:'rgba(255,163,0,0.9)', borderWidth:2, borderDash:[5,3], pointRadius:0, fill:false },
+        ]),
       },
       options: { responsive:true, maintainAspectRatio:false,
         plugins:{ legend:{display:false}, tooltip:{mode:'index',intersect:false} },
@@ -3917,11 +4021,11 @@ function updateInventoryTab(product, baseRows, scenRows, meta) {
       type: 'line',
       data: {
         labels,
-        datasets: [
-          { label:'Base MOH', data:bMOH, borderColor:'rgba(0,59,92,0.85)', borderWidth:2, pointRadius:0, fill:false },
-          { label:'Scen MOH', data:sMOH, borderColor:'rgba(255,163,0,0.9)', borderWidth:2, borderDash:[5,3], pointRadius:0, fill:false },
-          { label:'Critical', data:critLine, borderColor:'rgba(249,65,58,0.6)', borderWidth:1, borderDash:[3,3], pointRadius:0, fill:false },
-        ],
+        datasets: planDatasets([
+          { _role:'base',     label:'Base MOH', data:bMOH, borderColor:'rgba(0,59,92,0.85)', borderWidth:2, pointRadius:0, fill:false },
+          { _role:'scenario', label:'Scen MOH', data:sMOH, borderColor:'rgba(255,163,0,0.9)', borderWidth:2, borderDash:[5,3], pointRadius:0, fill:false },
+          { _role:'neutral',  label:'Critical', data:critLine, borderColor:'rgba(249,65,58,0.6)', borderWidth:1, borderDash:[3,3], pointRadius:0, fill:false },
+        ]),
       },
       options: { responsive:true, maintainAspectRatio:false,
         plugins:{ legend:{display:false}, tooltip:{mode:'index',intersect:false} },
@@ -4264,10 +4368,10 @@ function updateProductionTab(product, baseRows, scenRows, meta) {
       type: 'bar',
       data: {
         labels,
-        datasets: [
-          { label:'Base Prod', data:bProd, backgroundColor:'rgba(0,59,92,0.65)', borderRadius:2 },
-          { label:'Scenario Prod', data:sProd, backgroundColor:'rgba(255,163,0,0.65)', borderColor:'rgba(255,163,0,1)', borderWidth:1, borderRadius:2 },
-        ],
+        datasets: planDatasets([
+          { _role:'base',     label:'Base Prod', data:bProd, backgroundColor:'rgba(0,59,92,0.65)', borderRadius:2 },
+          { _role:'scenario', label:'Scenario Prod', data:sProd, backgroundColor:'rgba(255,163,0,0.65)', borderColor:'rgba(255,163,0,1)', borderWidth:1, borderRadius:2 },
+        ]),
       },
       options: { responsive:true, maintainAspectRatio:false,
         plugins:{
@@ -6353,6 +6457,7 @@ function init() {
     sel.innerHTML = products.map(p => `<option value="${p}">${p}</option>`).join('');
     sel.value = '188mg LP';
   }
+  if (typeof _syncPlanModeUI === 'function') _syncPlanModeUI();
   renderRegionToggles();  // also calls renderIndicationToggles()
   onProductChange();
   renderScenarioList();
