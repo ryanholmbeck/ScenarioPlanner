@@ -1838,10 +1838,11 @@ function applyDPLeadTimeOffset(rows, lpProduct) {
     const named   = lpr.supplier ? _supplierRegistryRow(lpProduct, lpr.supplier) : null;
     const namedEff= named ? _effectiveSupplierRow(lpProduct, named) : null;
     const sup     = namedEff || ((typeof getActiveSupplier === 'function') ? getActiveSupplier(lpProduct, lpr.month) : null);
-    const mfgLT  = Math.round((sup && sup.lead_time     != null) ? sup.lead_time     : (lpMeta.lead_time     || 5));
+    // DP (component of LP) is consumed when LP production STARTS — committed
+    // LP rows are starts — so DP demand lands at LP-start − allocation_lt.
+    // Mfg LT offsets LP's own delivery, not the component pull.
     const allocLT= Math.round((sup && sup.allocation_lt != null) ? sup.allocation_lt : (lpMeta.allocation_lt || 0));
-    const shift  = mfgLT + allocLT;
-    const dpMonth = ovMap[lpr.month] || _monthMinus(lpr.month, shift);
+    const dpMonth = ovMap[lpr.month] || _monthMinus(lpr.month, allocLT);
     dpDemandByMonth[dpMonth] = (dpDemandByMonth[dpMonth] || 0) + prod;
   }
   return rows.map(r => ({ ...r, demand: dpDemandByMonth[r.month] || 0 }));
@@ -1945,39 +1946,36 @@ function _monthMinus(monthIso, n) {
 //   parent.lead_time     = parent's manufacture LT (mfg-start → release)
 //   parent.allocation_lt = parent's component-allocation buffer (months before
 //                          parent mfg starts that children must be in hand)
-// child demand month = parent release month − (lead_time + allocation_lt)
 //
-// EXCEPTION: when allocationOverrides[parentProduct][parentMonth] is set,
-// it bypasses the LT math entirely. Useful for one-off batches where the
-// supplier routing doesn't match the registry's primary (e.g. a Mar 2028
-// 200mg DP batch routed to Simtra even though Patheon PDS-2 is the
-// registry's primary for that month, so editing Simtra's alloc_lt won't
-// take effect via getActiveSupplier).
+// TIMING MODEL: a parent batch's row .month is its production START. Its
+// components are consumed AT THE START, so child demand lands at
+//   childMonth = parentStart − allocation_lt
+// (Mfg LT is NOT subtracted here — it offsets the parent's own DELIVERY,
+// handled in runMRP, not the component pull.) The component qty comes from
+// the parent's .release (units started that month), not .prod (which is now
+// the parent's delivered units).
+//
+// EXCEPTION: allocationOverrides[parentProduct][parentMonth] pins the child
+// month directly for one-off batches whose routing differs from the registry.
 function deriveChildDemand(parentProduct, parentSchedRows, childProduct) {
   const demandByChildMonth = {};
   const ovMap = (typeof allocationOverrides === 'object' && allocationOverrides[parentProduct]) || {};
   for (const pr of parentSchedRows) {
-    const prod = pr.prod || 0;
-    if (prod <= 0) continue;
+    // Components are pulled by what the parent STARTS (release), not what it
+    // delivers. Fall back to .prod for any caller passing pre-MRP rows.
+    const startQty = (pr.release != null) ? pr.release : (pr.prod || 0);
+    if (startQty <= 0) continue;
     // Per-row supplier identity wins over the registry's primary pick.
-    // PROD_DATA rows carry .supplier, and the Production Schedule Override
-    // table lets the user route a row to any registered supplier — when
-    // it's set, look that supplier up directly so its Mfg LT / Alloc LT
-    // drive the cascade backshift (instead of the registry's primary,
-    // which may be a different vendor for that month).
     const named   = pr.supplier ? _supplierRegistryRow(parentProduct, pr.supplier) : null;
     const namedEff= named ? _effectiveSupplierRow(parentProduct, named) : null;
     const supRow  = namedEff || getActiveSupplier(parentProduct, pr.month);
     const sup     = pr.supplier || (supRow && supRow.supplier);
-    const mfgLT   = Math.round(pr.leadTime != null ? pr.leadTime
-                              : (supRow?.lead_time != null ? supRow.lead_time : 3));
     const allocLT = Math.round(pr.allocationLT != null ? pr.allocationLT
                               : (supRow?.allocation_lt != null ? supRow.allocation_lt : 0));
-    const shift   = mfgLT + allocLT;
-    // Per-batch allocation override wins over the LT-derived shift.
-    const childMonth = ovMap[pr.month] || _monthMinus(pr.month, shift);
+    // Child demand = parent START − allocation buffer.
+    const childMonth = ovMap[pr.month] || _monthMinus(pr.month, allocLT);
     const factor = _lookupDepFactor(parentProduct, childProduct, pr.month, sup);
-    const childUnits = prod * factor;
+    const childUnits = startQty * factor;
     demandByChildMonth[childMonth] = (demandByChildMonth[childMonth] || 0) + childUnits;
   }
   return demandByChildMonth;
@@ -2814,107 +2812,115 @@ function runMRP(baseRows, salesFactor, meta, horizonMonths, product, opts) {
   }
   const bindingThrough = _bindingThroughFor(product);
 
-  // Establish whether we've crossed out of the binding period yet (for seeding)
-  let seeded = false;
-  let runningEI = rows[0].bi;
+  // ── LEAD-TIME-AWARE MRP ────────────────────────────────────────────────
+  // A production batch that STARTS in month M delivers (adds to inventory)
+  // in month M + Mfg LT. Components are consumed at the START. So:
+  //   • releases[i] = units whose production STARTS in month i (the schedule)
+  //   • arrivals[i] = units DELIVERED in month i (= releases from i − LT)
+  //   • ei[i]       = bi[i] − demand[i] + arrivals[i]   (delivery drives stock)
+  // The MRP releases a batch NOW (month i) when projected inventory at the
+  // delivery horizon (i + LT) would fall below the target safety stock.
+  const n = rows.length;
+  const P  = rows.map(r => resolveSchedParams(product, r.month, meta));
+  const ltOf = i => Math.max(0, Math.round(P[i].leadTime != null ? P[i].leadTime : 0));
+  const bsOf = i => P[i].batchSize || meta.batch_size || 1;
 
+  // Avg future demand at each month (next 12) — drives MOH + safety targets.
+  const avgFut = new Array(n);
+  for (let i = 0; i < n; i++) {
+    let fd = 0, fc = 0;
+    for (let j = i + 1; j <= Math.min(i + 12, n - 1); j++) { fd += rows[j].demand; fc++; }
+    avgFut[i] = fc > 0 ? fd / fc : rows[i].demand;
+  }
+
+  const releases = new Array(n).fill(0);   // production STARTS in month i
+  const arrivals = new Array(n).fill(0);   // DELIVERIES in month i
+  const cancelledAt = new Array(n).fill(false);
+
+  // 1) Seed committed / override releases (treated as production STARTS).
+  for (let i = 0; i < n; i++) {
+    const committed = rows[i].prod || 0;
+    let rel = committed;
+    if (!baseMode && product) {
+      const eff = getEffectiveProd(product, rows[i].month, bsOf(i), committed);
+      if (eff.fromOverride) { rel = eff.units; cancelledAt[i] = !!eff.cancelled; }
+      if (runoutMode && !eff.fromOverride) rel = 0;
+      if (suppressPostBinding && bindingThrough && rows[i].month >= bindingThrough && !eff.fromOverride) rel = 0;
+    }
+    if (rel > 0) {
+      releases[i] += rel;
+      const a = i + ltOf(i);
+      if (a < n) arrivals[a] += rel;   // delivers LT months later
+    }
+  }
+
+  // 2) Forward pass: chain inventory off DELIVERIES, and release new batches
+  //    when the projected balance at the lead-time horizon dips below target.
+  const eiArr = new Array(n), biArr = new Array(n);
+  let seeded = false, runningEI = rows[0].bi;
+  for (let i = 0; i < n; i++) {
+    const inBinding = bindingThrough ? (rows[i].month < bindingThrough) : false;
+    if (!seeded) { runningEI = rows[i].bi; if (!inBinding) seeded = true; }
+    const bi = runningEI;
+    let ei = bi - rows[i].demand + arrivals[i];
+
+    // MRP reorder — only outside binding and runout (those are committed-only).
+    if (!runoutMode && !inBinding && avgFut[i] > 0 && bsOf(i) > 0) {
+      const lt = ltOf(i);
+      const hIdx = Math.min(i + lt, n - 1);
+      const targetEI    = (P[hIdx].targetMOH    || 0) * avgFut[hIdx];
+      const overstockEI = (P[hIdx].overstockMOH || 0) * avgFut[hIdx];
+      // Project the available balance at the delivery horizon (i + LT) using
+      // demand + already-scheduled arrivals between now and then.
+      let proj = ei;
+      for (let j = i + 1; j <= i + lt; j++) {
+        const dem = (j < n) ? rows[j].demand : avgFut[n - 1];
+        const arr = (j < n) ? arrivals[j] : 0;
+        proj += arr - dem;
+      }
+      if (proj < targetEI) {
+        const bs = bsOf(i);
+        let qty = _safeCeiling(targetEI - proj, bs);
+        while (qty > bs && (proj + qty - bs) >= overstockEI) qty -= bs;
+        if (qty < bs) qty = bs;
+        releases[i] += qty;                       // start now
+        const a = i + lt;
+        if (a < n) arrivals[a] += qty;            // deliver at horizon (applied when loop reaches it)
+        else ei += 0;                             // beyond window — not shown
+      }
+    }
+    ei = Math.max(ei, 0);
+    biArr[i] = bi; eiArr[i] = ei;
+    runningEI = ei;
+  }
+
+  // 3) Build result rows. prod = DELIVERED units (drives charts + EI per the
+  //    spec); release = production STARTED that month (drives the schedule
+  //    and child-component demand).
   const result = [];
-
-  for (let i = 0; i < rows.length; i++) {
-    const base   = rows[i];
-    const demand = base.demand;   // already sales-factor adjusted by applySupplyMode
-    const monthIso = base.month;
-
-    // Resolve per-month supplier params (batch size / lead time / MOH targets)
-    const params = resolveSchedParams(product, monthIso, meta);
-    const { batchSize, leadTime, targetMOH, criticalMOH, overstockMOH } = params;
-
-    // Avg future demand for MOH calc (next 12 months from current month)
-    let futureDemand = 0, futureCount = 0;
-    for (let j = i + 1; j <= Math.min(i + 12, rows.length - 1); j++) {
-      futureDemand += rows[j].demand;
-      futureCount++;
-    }
-    const avgFuture = futureCount > 0 ? futureDemand / futureCount : demand;
-
-    // Within binding period: PE.bi is the source of truth. Keep refreshing
-    // the seed. After we cross the cutoff, lock seed and start simulating.
-    const inBinding = bindingThrough ? (monthIso < bindingThrough) : false;
-    if (!seeded) {
-      runningEI = base.bi;
-      if (!inBinding) seeded = true;
-    }
-
-    // ── SAWTOOTH SCHEDULING ─────────────────────────────────────────────────
-    let projectedEI = runningEI - demand;
-    let batchQty    = 0;
-
-    if (avgFuture > 0 && batchSize > 0) {
-      const targetEI    = targetMOH    * avgFuture;
-      const overstockEI = overstockMOH * avgFuture;
-
-      if (projectedEI < targetEI) {
-        const shortfall = targetEI - projectedEI;
-        batchQty = _safeCeiling(shortfall, batchSize);
-
-        // Trim back full batches if scheduling would push EI above Overstock
-        while (batchQty > batchSize &&
-               (projectedEI + batchQty - batchSize) >= overstockEI) {
-          batchQty -= batchSize;
-        }
-        // Always fire at least one full batch once trigger crossed
-        if (batchQty < batchSize) batchQty = batchSize;
-      }
-    }
-
-    // ── GATES (scenario-only) ──────────────────────────────────────────────
-    let scenProd = batchQty;
-    // Base mode never consults the override layer — it's a pure MRP run.
-    const eff = (!baseMode && product)
-      ? getEffectiveProd(product, monthIso, batchSize, 0)
-      : { units: 0, fromOverride: false, cancelled: false };
-
-    if (runoutMode) {
-      // Runout mode: no MRP at all; only manual overrides
-      scenProd = eff.fromOverride ? eff.units : 0;
-    } else {
-      // Suppress post-binding: zero out MRP-suggested production once past binding
-      if (suppressPostBinding && bindingThrough && monthIso >= bindingThrough && !eff.fromOverride) {
-        scenProd = 0;
-      }
-      // Manual production override (units = count × active batch size) wins
-      if (eff.fromOverride) scenProd = eff.units;
-    }
-
-    // Binding period: production is whatever PROD_DATA / base scheduled. We
-    // do NOT overwrite it with MRP output. base.prod already reflects the
-    // committed schedule.
-    if (inBinding) {
-      scenProd = base.prod || 0;
-    }
-
-    // Carry running EI forward
-    runningEI = Math.max(projectedEI + scenProd, 0);
-    const moh = avgFuture > 0 ? runningEI / avgFuture : (runningEI > 0 ? 999 : 0);
-    const risk = riskClass(moh, {
-      target_moh: targetMOH, critical_moh: criticalMOH,
-      overstock_moh: overstockMOH });
-
+  for (let i = 0; i < n; i++) {
+    const moh = avgFut[i] > 0 ? eiArr[i] / avgFut[i] : (eiArr[i] > 0 ? 999 : 0);
+    const risk = riskClass(moh, { target_moh: P[i].targetMOH, critical_moh: P[i].criticalMOH, overstock_moh: P[i].overstockMOH });
+    const bs = bsOf(i);
     result.push({
-      month:      monthIso,
-      ml:         base.ml,
-      bi:         Math.round((projectedEI + demand) * 100) / 100,  // pre-demand inv
-      demand:     Math.round(demand * 100) / 100,
-      prod:       Math.round(scenProd * 100) / 100,
-      ei:         Math.round(runningEI * 100) / 100,
-      moh:        Math.round(moh * 100) / 100,
+      month:        rows[i].month,
+      ml:           rows[i].ml,
+      bi:           Math.round(biArr[i] * 100) / 100,
+      demand:       Math.round(rows[i].demand * 100) / 100,
+      prod:         Math.round(arrivals[i] * 100) / 100,   // delivered this month
+      arrival:      Math.round(arrivals[i] * 100) / 100,
+      release:      Math.round(releases[i] * 100) / 100,   // started this month
+      deliverLT:    ltOf(i),
+      ei:           Math.round(eiArr[i] * 100) / 100,
+      moh:          Math.round(moh * 100) / 100,
       risk,
-      batchSize,
-      batches:    batchSize > 0 ? Math.round(scenProd / batchSize) : 0,
-      supplier:   params.supplier,
-      leadTime:   leadTime,
-      cancelled:  eff.cancelled,           // true iff prodOverride=0 explicitly
-      committed:  base.prod || 0,          // what PROD_DATA said (for delta display)
+      batchSize:    bs,
+      batches:      bs > 0 ? Math.round(releases[i] / bs) : 0,  // batches STARTED
+      arrBatches:   bs > 0 ? Math.round(arrivals[i] / bs) : 0,  // batches DELIVERED
+      supplier:     P[i].supplier,
+      leadTime:     ltOf(i),
+      cancelled:    cancelledAt[i],
+      committed:    rows[i].prod || 0,
     });
   }
   return result;
