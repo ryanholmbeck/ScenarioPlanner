@@ -3771,8 +3771,18 @@ function runScenario() {
       cascade.byProduct[childProd] = runMRP(childRows, 100, childMeta, childBase.length, childProd);
     }
 
-    _runTier('200mg DP', ['188mg LP', '188mg LP - EU Stock']);
-    _runTier('50mg DP',  ['47mg LP',  '47mg LP - EU Stock']);
+    // EU-combine-aware parents: when EU stock is pooled with its parent
+    // (the default), getBaseRows('188mg LP') already returns the MERGED
+    // (US + EU) demand/production — so deriving DP demand from BOTH the
+    // parent AND the EU-stock variant double-counts. Use the parent only.
+    // When separated, each variant carries its own non-overlapping demand,
+    // so we derive from both.
+    const _euOn = (typeof _euCombineActive === 'function') ? _euCombineActive() : true;
+    const DP200_PARENTS = _euOn ? ['188mg LP'] : ['188mg LP', '188mg LP - EU Stock'];
+    const DP50_PARENTS  = _euOn ? ['47mg LP']  : ['47mg LP',  '47mg LP - EU Stock'];
+
+    _runTier('200mg DP', DP200_PARENTS);
+    _runTier('50mg DP',  DP50_PARENTS);
 
     // Tier 3 — DS from DP (both 200mg and 50mg feed Drug Substance)
     _runTier('Drug Substance', ['200mg DP', '50mg DP']);
@@ -3821,8 +3831,9 @@ function runScenario() {
         baseCascade.demandByProduct[childProd] = derivedDem;
         baseCascade.byProduct[childProd] = runMRP(applyDerivedDemand(childBase, derivedDem), 100, getMeta(childProd), childBase.length, childProd, { base: true });
       }
-      _runTierB('200mg DP', ['188mg LP', '188mg LP - EU Stock']);
-      _runTierB('50mg DP',  ['47mg LP',  '47mg LP - EU Stock']);
+      const _euOnB = (typeof _euCombineActive === 'function') ? _euCombineActive() : true;
+      _runTierB('200mg DP', _euOnB ? ['188mg LP'] : ['188mg LP', '188mg LP - EU Stock']);
+      _runTierB('50mg DP',  _euOnB ? ['47mg LP']  : ['47mg LP',  '47mg LP - EU Stock']);
       _runTierB('Drug Substance', ['200mg DP', '50mg DP']);
       for (const rm of ['LLPS', 'APAD', 'APC', 'APG', 'APT']) _runTierB(rm, ['Drug Substance']);
     })();
