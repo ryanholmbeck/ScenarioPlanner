@@ -728,6 +728,7 @@
       <div class="tab" onclick="switchTab('valuation')" title="Inventory Valuation"><span class="tab-icon">💎</span><span class="tab-label"> Inv. Valuation</span></div>
       <div class="tab" onclick="switchTab('runway')" title="Inventory Runway"><span class="tab-icon">📏</span><span class="tab-label"> Inv. Runway</span></div>
       <div class="tab" onclick="switchTab('combined')" title="Combined Pool Planning"><span class="tab-icon">🔗</span><span class="tab-label"> Combined Pool</span></div>
+      <div class="tab" onclick="switchTab('supplyplan')" title="Order-level supply plan / pegged requirements"><span class="tab-icon">📋</span><span class="tab-label"> Supply Plan</span></div>
       <button class="tab-mode-btn" id="tab-mode-btn" onclick="toggleTabMode()" title="Toggle icon-only / full labels">⊞ Icons only</button>
     </div>
 
@@ -1267,6 +1268,25 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
       </div>
 
     </div><!-- /tab-combined -->
+
+    <!-- TAB: SUPPLY PLAN — order-level pegging ledger for the spotlight product -->
+    <div id="tab-supplyplan" class="tab-content">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title" id="title-supplyplan">Supply Plan — Pegged Requirements</div>
+            <div class="card-subtitle">Date-ordered ledger for the spotlight product: opening stock, forecast demand, and planned / firm orders. Each order <b>starts</b> on its Start Date and <b>delivers</b> (its Reqt lands in stock) on the Due Date, Mfg-LT months later. Projected Inventory and MoS run forward across every line.</div>
+          </div>
+          <div id="supplyplan-kpi" style="font-size:11px;color:var(--muted);white-space:nowrap;"></div>
+        </div>
+        <div class="table-wrap">
+          <table id="tbl-supplyplan">
+            <thead id="tbl-supplyplan-head"></thead>
+            <tbody id="tbl-supplyplan-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div><!-- /tab-supplyplan -->
 
     </div>
 </div><!-- /workspace -->
@@ -3435,6 +3455,95 @@ function planDatasets(datasets) {
 let baseRowsCache = [];
 let scenRowsCache = [];
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  CHART SOURCE-DATA GRIDS — an expandable, transposed (metrics × months) table
+//  under every chart. Reads each chart's OWN labels + datasets straight from
+//  the Chart.js instance, so it always matches what's plotted and needs no
+//  per-chart wiring: attachAllChartData() walks the global `charts` registry
+//  after each render. Collapsed by default; one Copy-CSV button per grid.
+// ══════════════════════════════════════════════════════════════════════════════
+function _csFmt(v) {
+  if (v == null || (typeof v === 'number' && !isFinite(v))) return '—';
+  if (typeof v === 'object') v = (v.y != null ? v.y : (v.x != null ? v.x : ''));   // {x,y} points
+  const n = Number(v);
+  if (!isFinite(n)) return String(v);
+  return (Math.round(n * 100) / 100).toLocaleString('en-US');
+}
+function attachChartData(canvasId, labels, series) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || typeof canvas.closest !== 'function') return;
+  const card = canvas.closest('.card');
+  const host = card || canvas.parentElement;
+  if (!host) return;
+
+  let det = host.querySelector(':scope > details.chart-src');
+  if (!det) {
+    det = document.createElement('details');
+    det.className = 'chart-src';
+    det.style.cssText = 'margin:8px 14px 4px;border-top:1px dashed var(--border);font-size:11px;';
+    const sum = document.createElement('summary');
+    sum.style.cssText = 'cursor:pointer;color:var(--muted);font-weight:600;padding:6px 0;list-style:none;user-select:none;';
+    sum.innerHTML = '▸ Source data';
+    det.appendChild(sum);
+    det.addEventListener('toggle', () => {
+      sum.innerHTML = (det.open ? '▾' : '▸') + ' Source data';
+    });
+    const body = document.createElement('div');
+    body.className = 'chart-src-body';
+    body.style.cssText = 'overflow-x:auto;padding-bottom:8px;';
+    det.appendChild(body);
+    host.appendChild(det);
+  }
+  const body = det.querySelector('.chart-src-body');
+  if (!body) return;
+
+  // Header (months) + one row per series.
+  const head = '<tr><th style="position:sticky;left:0;background:var(--navy);z-index:2;text-align:left;">Metric</th>' +
+    labels.map(l => `<th style="text-align:right;white-space:nowrap;">${l}</th>`).join('') + '</tr>';
+  const rows = series.map(s => {
+    const cells = (s.values || []).map(v => `<td style="text-align:right;white-space:nowrap;">${_csFmt(v)}</td>`).join('');
+    return `<tr><td style="position:sticky;left:0;background:var(--card);font-weight:600;text-align:left;white-space:nowrap;">${s.label || ''}</td>${cells}</tr>`;
+  }).join('');
+  body.innerHTML =
+    `<div style="display:flex;justify-content:flex-end;margin:2px 0;">
+       <button type="button" onclick="copyChartData('${canvasId}')" title="Copy this grid as CSV"
+         style="font-size:10px;padding:2px 8px;background:transparent;border:1px solid var(--border);border-radius:4px;cursor:pointer;color:var(--text);">⧉ Copy CSV</button>
+     </div>
+     <table class="chart-src-tbl" style="border-collapse:collapse;font-size:10px;min-width:100%;">
+       <thead>${head}</thead><tbody>${rows}</tbody>
+     </table>`;
+}
+function copyChartData(canvasId) {
+  const ch = (typeof charts !== 'undefined') ? charts[canvasId] : null;
+  if (!ch || !ch.data) return;
+  const labels = ch.data.labels || [];
+  const lines = ['Metric,' + labels.map(l => `"${String(l).replace(/"/g, '""')}"`).join(',')];
+  (ch.data.datasets || []).forEach(d => {
+    const vals = (d.data || []).map(v => {
+      if (v && typeof v === 'object') v = (v.y != null ? v.y : v.x);
+      return (v == null || (typeof v === 'number' && !isFinite(v))) ? '' : v;
+    });
+    lines.push(`"${String(d.label || '').replace(/"/g, '""')}",` + vals.join(','));
+  });
+  const csv = lines.join('\n');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(csv).then(
+      () => { if (typeof toast === 'function') toast('📋 Source data copied as CSV'); },
+      () => { if (typeof toast === 'function') toast('Copy failed — select the table manually'); }
+    );
+  }
+}
+function attachAllChartData() {
+  if (typeof charts === 'undefined' || !charts) return;
+  for (const id of Object.keys(charts)) {
+    const ch = charts[id];
+    if (!ch || !ch.data || !Array.isArray(ch.data.datasets)) continue;
+    try {
+      attachChartData(id, ch.data.labels || [], ch.data.datasets.map(d => ({ label: d.label, values: d.data })));
+    } catch (e) { /* a single chart's grid must never break the render */ }
+  }
+}
+
 function runScenario() {
   const product    = document.getElementById('sel-product')?.value;
   const salesFactor = parseInt(document.getElementById('sales-factor')?.value || 100);
@@ -3903,6 +4012,7 @@ function runScenario() {
   updateInventoryTab(product, displayBRows, displaySRows, meta);
   updateDemandTab(product, displayBRows, displaySRows, salesFactor);
   updateProductionTab(product, displayBRows, displaySRows, meta);
+  renderSupplyPlanTab(product, displaySRows, meta);
   updateBudgetTab(product, displayBRows, displaySRows);
   updateRMTab(product, displaySRows, salesFactor);
   const fullScenDemand = displaySRows.concat(scenRows.slice(horizon)).map(r => ({ ...r }));
@@ -3913,6 +4023,7 @@ function runScenario() {
   // data, so every scenario re-run must also refresh it — otherwise supplier
   // edits, lot changes, or factor moves in other tabs leave cpool stale.
   if (typeof runCombinedPoolTab === 'function') runCombinedPoolTab();
+  if (typeof attachAllChartData === 'function') attachAllChartData();
 }
 
 
@@ -4428,6 +4539,117 @@ function _renderCapacityFlags(product, scenRows, meta) {
   }
   body.innerHTML = allBlocks.join('');
   card.style.display = '';
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  TAB: SUPPLY PLAN — order-level pegging ledger
+//  A date-sorted ledger of supply/demand events for the spotlight product:
+//    • Opening Stock (BI at the start of the horizon)
+//    • Demand        (forecast consumption, on its month)
+//    • Planned / Firm orders (release units, dated on their DELIVERY = start +
+//      Mfg LT, with the Start Date carried alongside)
+//  Running Projected Inventory + MoS chain forward across every line, mirroring
+//  the arrival-based runMRP model (supply lands before demand within a month).
+// ══════════════════════════════════════════════════════════════════════════════
+function renderSupplyPlanTab(product, scenRows, meta) {
+  const head = document.getElementById('tbl-supplyplan-head');
+  const body = document.getElementById('tbl-supplyplan-body');
+  if (!head || !body) return;
+
+  const unit   = (meta && meta.unit) || 'units';
+  const _q     = (meta && meta.unit === 'kg') ? 1 : 0;
+  const fmtU   = n => Number(n).toLocaleString('en-US', { minimumFractionDigits: _q, maximumFractionDigits: _q });
+  const tgtMOH = (meta && meta.target_moh) || 0;
+  const critMOH = (meta && meta.critical_moh) || 0;
+
+  const titleEl = document.getElementById('title-supplyplan');
+  if (titleEl) titleEl.textContent = product ? `Supply Plan — Pegged Requirements — ${product}` : 'Supply Plan — Pegged Requirements';
+
+  head.innerHTML = `<tr>
+    <th>Due Date</th><th>Category</th><th>Details</th><th>Supplier</th><th>Start Date</th>
+    <th style="text-align:right;">Reqt (${unit})</th>
+    <th style="text-align:right;">Safety Stk</th>
+    <th style="text-align:right;">Proj. Inventory</th>
+    <th style="text-align:right;">MoS</th></tr>`;
+
+  if (!scenRows || !scenRows.length) {
+    body.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:14px;">No supply plan for this product in the view window.</td></tr>`;
+    const k = document.getElementById('supplyplan-kpi'); if (k) k.textContent = '';
+    return;
+  }
+
+  // Avg future demand (next 12 mo) per month — drives Safety Stk + MoS.
+  const n = scenRows.length;
+  const monthIndex = {};
+  scenRows.forEach((r, i) => { monthIndex[r.month] = i; });
+  const avgFutAt = i => {
+    let s = 0, c = 0;
+    for (let j = i + 1; j <= Math.min(i + 12, n - 1); j++) { s += scenRows[j].demand || 0; c++; }
+    return c > 0 ? s / c : (scenRows[i].demand || 0);
+  };
+  const avgAtMonth = mo => { const i = monthIndex[mo]; return avgFutAt(i != null ? i : n - 1); };
+
+  // ── Build the event ledger ──────────────────────────────────────────────
+  const events = [];
+  events.push({ date: scenRows[0].month, sort: 0, cat: 'Opening Stock', details: '—', supplier: '', start: '', reqt: scenRows[0].bi || 0 });
+  scenRows.forEach(r => {
+    const dem = r.demand || 0;
+    if (dem > 0) events.push({ date: r.month, sort: 2, cat: 'Demand', details: 'Forecast demand', supplier: '', start: '', reqt: -dem });
+    const rel = r.release || 0;
+    if (rel > 0 && !r.cancelled) {
+      const lt  = Math.round(r.leadTime || 0);
+      const due = (typeof _monthPlus === 'function') ? _monthPlus(r.month, lt) : r.month;
+      const bs  = r.batchSize || (meta && meta.batch_size) || 1;
+      const batches = bs > 0 ? Math.round(rel / bs) : 0;
+      const firm = (r.committed || 0) > 0;
+      events.push({
+        date: due, sort: 1,
+        cat: firm ? 'Firm / Committed' : 'Planned Order',
+        details: `WO-${r.month.slice(0, 7).replace('-', '')} · ${batches} batch${batches === 1 ? '' : 'es'}`,
+        supplier: r.supplier || (meta && meta.supplier) || '—',
+        start: r.month, reqt: rel,
+      });
+    }
+  });
+  // Date asc; within a date supply (sort 1) lands before demand (sort 2).
+  events.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.sort - b.sort));
+
+  const catPill = {
+    'Opening Stock':    'background:#e5e7eb;color:#374151;',
+    'Demand':           'background:#fee2e2;color:#991b1b;',
+    'Firm / Committed': 'background:#fff3cd;color:#92400e;',
+    'Planned Order':    'background:#dbeafe;color:#1e40af;',
+  };
+
+  let avail = 0;
+  body.innerHTML = events.map(e => {
+    avail += e.reqt;
+    const dispInv = Math.max(avail, 0);
+    const af      = avgAtMonth(e.date);
+    const safety  = tgtMOH * af;
+    const mos     = af > 0 ? dispInv / af : (dispInv > 0 ? Infinity : 0);
+    const reqtCol = e.cat === 'Demand' ? '#dc2626' : (e.reqt > 0 ? '#1a7a40' : 'var(--muted)');
+    const pill    = catPill[e.cat] || 'background:#e5e7eb;color:#374151;';
+    const mosStyle = (critMOH && mos < critMOH) ? 'color:#dc2626;font-weight:700;' : '';
+    return `<tr>
+      <td style="white-space:nowrap;">${monthLabel(e.date)}</td>
+      <td><span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;${pill}">${e.cat}</span></td>
+      <td style="white-space:nowrap;">${e.details}</td>
+      <td style="white-space:nowrap;">${e.supplier || ''}</td>
+      <td style="white-space:nowrap;">${e.start ? monthLabel(e.start) : '—'}</td>
+      <td style="text-align:right;color:${reqtCol};font-weight:600;white-space:nowrap;">${e.reqt > 0 ? '+' : ''}${fmtU(e.reqt)}</td>
+      <td style="text-align:right;color:var(--muted);white-space:nowrap;">${fmtU(safety)}</td>
+      <td style="text-align:right;font-weight:600;white-space:nowrap;">${fmtU(dispInv)}</td>
+      <td style="text-align:right;white-space:nowrap;${mosStyle}">${mos === Infinity ? '∞' : mos.toFixed(1)}</td>
+    </tr>`;
+  }).join('');
+
+  const orders = events.filter(e => e.cat === 'Firm / Committed' || e.cat === 'Planned Order');
+  const kpi = document.getElementById('supplyplan-kpi');
+  if (kpi) {
+    const span = events.length ? `${monthLabel(events[0].date)} – ${monthLabel(events[events.length - 1].date)}` : '';
+    kpi.textContent = `${orders.length} order${orders.length === 1 ? '' : 's'} · ${span}`;
+  }
 }
 
 function updateProductionTab(product, baseRows, scenRows, meta) {
@@ -9616,6 +9838,8 @@ function runCombinedPoolTab() {
 
   document.getElementById('cpool-title-inv').textContent = `${lpProd} + ${dpProd} — Combined Pool Inventory`;
   document.getElementById('cpool-title-prod').textContent = `${lpProd} + ${dpProd} — Production Contributing to Pool`;
+
+  if (typeof attachAllChartData === 'function') attachAllChartData();
 }
 </script>
 
@@ -9694,6 +9918,12 @@ function runCombinedPoolTab() {
   #md-body tr:nth-child(even) td { background:rgba(26,43,94,0.02); }
   #md-body .md-hint { font-size:11px; color:var(--muted); margin:0 0 10px; padding:6px 10px; background:rgba(218,165,32,0.06); border-left:3px solid var(--gold); border-radius:3px; }
   #md-body input, #md-body select { font-size:11px; padding:1px 4px; }
+  details.chart-src > summary { list-style:none; }
+  details.chart-src > summary::-webkit-details-marker { display:none; }
+  details.chart-src > summary::marker { content:""; }
+  details.chart-src .chart-src-tbl th { background:var(--navy); color:#fff; padding:3px 7px; font-weight:600; position:sticky; top:0; }
+  details.chart-src .chart-src-tbl td { padding:2px 7px; border-bottom:1px solid var(--border); }
+  details.chart-src .chart-src-tbl tr:nth-child(even) td { background:rgba(26,43,94,0.03); }
 </style>
 </body>
 </html>
