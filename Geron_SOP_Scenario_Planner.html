@@ -3828,31 +3828,20 @@ function runScenario() {
     })();
     window.__baseCascade = baseCascade;
 
-    // ── Wire cascade demand into the spotlight view ───────────────────────
-    // DP spotlight intentionally not patched here: applyDPLeadTimeOffset
-    // already shifts DP demand from LP production. DS and RM tiers take both
-    // their base AND scenario series from the respective cascades.
-    const _PARENTS_OF = {
-      'Drug Substance': ['200mg DP', '50mg DP'],
-      'LLPS': ['Drug Substance'],
-      'APAD': ['Drug Substance'],
-      'APC':  ['Drug Substance'],
-      'APG':  ['Drug Substance'],
-      'APT':  ['Drug Substance'],
-    };
-    if (_PARENTS_OF[product]) {
-      // BASE view: take the full base-cascade rows (continuous demand +
-      // MRP-scheduled production + coherent EI/MOH), aligned to the base
-      // display window by month so any display-only fields (ml, rm) survive.
-      const baseCasc = baseCascade.byProduct[product];
+    // ── Wire MRP cascade into the spotlight view (ALL tiers) ──────────────
+    // Every product the cascade covers (LP, DP, DS, RM) takes both its BASE
+    // and SCENARIO series from the respective cascade run, so MRP-suggested
+    // production + lead-time delivery + coherent EI show on every tier — not
+    // just DS/RM. Keyed by the EU-combine-normalized spotlight name.
+    const _cascKey = _productForScenario;
+    if (baseCascade.byProduct[_cascKey] || cascade.byProduct[_cascKey]) {
+      const baseCasc = baseCascade.byProduct[_cascKey];
       if (baseCasc && baseCasc.length) {
         const byMonth = {};
         baseCasc.forEach(r => { byMonth[r.month] = r; });
-        displayBRows = displayBRows.map(r => byMonth[r.month] ? { ...r, ...byMonth[r.month] } : { ...r, demand: 0, prod: 0 });
+        displayBRows = displayBRows.map(r => byMonth[r.month] ? { ...r, ...byMonth[r.month] } : { ...r, demand: 0, prod: 0, release: 0, arrival: 0 });
       }
-      // SCENARIO view: scenario cascade rows directly (derived demand +
-      // MRP-scheduled production + recomputed EI/MOH).
-      const scenCasc = cascade.byProduct[product];
+      const scenCasc = cascade.byProduct[_cascKey];
       if (scenCasc && scenCasc.length) {
         displaySRows = scenCasc.slice(0, displaySRows.length);
       }
