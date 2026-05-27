@@ -4492,13 +4492,17 @@ function updateProductionTab(product, baseRows, scenRows, meta) {
     const cancelBadge = s.cancelled
       ? ' <span style="font-size:9px;font-weight:700;background:#dc2626;color:#fff;border-radius:3px;padding:1px 5px;">CANCELLED</span>'
       : '';
+    // Batch count uses each row's OWN batch size (the active supplier's for
+    // that month, as the engine scheduled it) — not the master-data default
+    // — so the table matches runMRP and the Combined Pool exactly.
+    const bbs = b.batchSize || bSize, sbs = s.batchSize || bSize, rbs = r.batchSize || bSize;
     if (compare) {
-      const dB = Math.round(sRel/bSize) - Math.round(bRel/bSize);
+      const dB = Math.round(sRel/sbs) - Math.round(bRel/bbs);
       const dU = sRel - bRel;
       tbody.innerHTML += `<tr>
         <td>${monthLabel(b.month)}</td>
-        <td>${fmt(Math.round(bRel/bSize))}</td><td>${fmtQty(bRel,meta)}</td>
-        <td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmt(Math.round(sRel/bSize))}</td><td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmtQty(sRel,meta)}${cancelBadge}</td>
+        <td>${fmt(Math.round(bRel/bbs))}</td><td>${fmtQty(bRel,meta)}</td>
+        <td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmt(Math.round(sRel/sbs))}</td><td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmtQty(sRel,meta)}${cancelBadge}</td>
         ${compCell}
         <td class="${dB>0?'diff-pos':dB<0?'diff-neg':'diff-neu'}">${dB>0?'+':''}${dB}</td>
         <td class="${dU>0?'diff-pos':dU<0?'diff-neg':'diff-neu'}">${dU>0?'+':''}${fmtQty(dU,meta)}</td>
@@ -4509,7 +4513,7 @@ function updateProductionTab(product, baseRows, scenRows, meta) {
       const cancelStyle = (!isBasePlan() && r.cancelled) ? ' style="color:#dc2626;font-weight:600;"' : '';
       tbody.innerHTML += `<tr>
         <td>${monthLabel(r.month)}</td>
-        <td${cancelStyle}>${fmt(Math.round(rRel/bSize))}</td><td${cancelStyle}>${fmtQty(rRel,meta)}${cb}</td>
+        <td${cancelStyle}>${fmt(Math.round(rRel/rbs))}</td><td${cancelStyle}>${fmtQty(rRel,meta)}${cb}</td>
         ${compCell}
         <td>${_delivers(r)}</td>
       </tr>`;
