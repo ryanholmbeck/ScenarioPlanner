@@ -6547,13 +6547,15 @@ function checkDataMode() {
 //  INIT
 // ══════════════════════════════════════════════════════════════════════════════
 function init() {
-  // Restore any Master Data edits the user saved in a prior session
-  // BEFORE building the product dropdown — saved RAW edits might add or
-  // remove products. Falls through silently if localStorage is empty,
-  // unreadable, or carries corrupt JSON.
+  // Restore saved state BEFORE building the product dropdown — saved RAW
+  // edits might add or remove products. _hydrateWorkingFile() applies a
+  // baked working-file payload (the portable, shareable source of truth)
+  // and/or this browser's localStorage edits, with the file winning when
+  // they diverge. Falls through silently on empty/corrupt state.
   try {
-    if (typeof _mdLoadPersistedState === 'function') _mdLoadPersistedState();
-  } catch (e) { console.warn('Master Data persistence load failed:', e); }
+    if (typeof _hydrateWorkingFile === 'function') _hydrateWorkingFile();
+    else if (typeof _mdLoadPersistedState === 'function') _mdLoadPersistedState();
+  } catch (e) { console.warn('Working-file / Master Data persistence load failed:', e); }
 
   const products = Object.keys(RAW);
   if (products.length) {
@@ -7673,6 +7675,132 @@ function mdResetToWorkbook() {
   _mdClearPersistedState();
   if (typeof toast === 'function') toast('↺ Master Data reset — reloading…');
   setTimeout(() => { location.reload(); }, 600);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  WORKING-FILE PERSISTENCE — bake state into a downloadable copy of the HTML
+//
+//  localStorage is per-browser / per-device and does NOT travel with a shared
+//  file. "Save working file" bakes the FULL state (master data + every
+//  override layer) into a downloaded copy of this page as an inert
+//  <script type="application/json"> block, so the file itself becomes the
+//  portable, shareable source of truth. A stamp lets in-session localStorage
+//  edits survive a reload of the SAME file, while a newer shared file always
+//  wins on open.
+// ══════════════════════════════════════════════════════════════════════════
+const _OVERRIDE_LS = {
+  lotOverrides:        'geron_lot_overrides',
+  supplierOverrides:   'geron_supplier_overrides',
+  depOverrides:        'geron_dep_overrides',
+  biOverrides:         'geron_bi_overrides',
+  prodOverrides:       'geron_prod_overrides',
+  allocationOverrides: 'geron_alloc_overrides',
+};
+// Live reference to an override map by name. They are `let` bindings closed
+// over elsewhere, so callers MUST mutate the returned object in place rather
+// than reassign it.
+function _overrideRef(name) {
+  switch (name) {
+    case 'lotOverrides':        return (typeof lotOverrides        !== 'undefined') ? lotOverrides        : null;
+    case 'supplierOverrides':   return (typeof supplierOverrides   !== 'undefined') ? supplierOverrides   : null;
+    case 'depOverrides':        return (typeof depOverrides        !== 'undefined') ? depOverrides        : null;
+    case 'biOverrides':         return (typeof biOverrides         !== 'undefined') ? biOverrides         : null;
+    case 'prodOverrides':       return (typeof prodOverrides       !== 'undefined') ? prodOverrides       : null;
+    case 'allocationOverrides': return (typeof allocationOverrides !== 'undefined') ? allocationOverrides : null;
+  }
+  return null;
+}
+function _readBakedState() {
+  const el = document.getElementById('__baked_state');
+  if (!el) return null;
+  try {
+    const s = JSON.parse(el.textContent || 'null');
+    return (s && typeof s === 'object') ? s : null;
+  } catch (e) { return null; }
+}
+function _applyOverrideSnapshot(snap) {
+  if (!snap || typeof snap !== 'object') return;
+  for (const name of Object.keys(_OVERRIDE_LS)) {
+    const target = _overrideRef(name);
+    if (!target || typeof target !== 'object') continue;
+    const src = snap[name];
+    for (const k of Object.keys(target)) delete target[k];   // mutate in place
+    if (src && typeof src === 'object') for (const k of Object.keys(src)) target[k] = src[k];
+  }
+}
+function _persistOverridesToLS() {
+  for (const [name, key] of Object.entries(_OVERRIDE_LS)) {
+    try { localStorage.setItem(key, JSON.stringify(_overrideRef(name) || {})); } catch (e) {}
+  }
+}
+// Boot hydration. Replaces the old _mdLoadPersistedState() call at the top of
+// init(). Precedence:
+//   • Baked state (a saved working file) is the authoritative base.
+//   • localStorage holds in-session edits; it wins ON TOP only when its stamp
+//     matches the open file's stamp (i.e. edits made against THIS file). A
+//     different/newer shared file always wins, and localStorage is re-synced
+//     to it so later same-file reloads keep working.
+function _hydrateWorkingFile() {
+  const baked = _readBakedState();
+  const bakedStamp = baked ? (baked.stamp || 'baked') : 'workbook';
+  let lsStamp = null;
+  try { lsStamp = localStorage.getItem('geron_state_stamp'); } catch (e) {}
+  const lsMatches = (lsStamp || 'workbook') === bakedStamp;
+
+  if (baked) {
+    if (baked.md) for (const k of _MD_KEYS) if (baked.md[k] != null) window[k] = baked.md[k];
+    if (!lsMatches) _applyOverrideSnapshot(baked.overrides);
+  }
+  if (lsMatches) {
+    // In-session edits made against THIS file version win on top. (Override
+    // layers self-loaded from localStorage at their declaration.)
+    try { _mdLoadPersistedState(); } catch (e) {}
+  } else {
+    // A different/newer file: its baked data is authoritative. Sync
+    // localStorage to it so subsequent same-file reloads preserve edits.
+    try {
+      _mdPersistAll();
+      _persistOverridesToLS();
+      localStorage.setItem('geron_state_stamp', bakedStamp);
+    } catch (e) {}
+  }
+}
+// User-facing "Save working file" — download a copy of this HTML carrying all
+// current data. Share THAT file.
+function mdDownloadWorkingFile() {
+  try {
+    const stamp = 'wf-' + Date.now().toString(36);
+    const state = { stamp, savedAt: new Date().toISOString(), md: {}, overrides: {} };
+    for (const k of _MD_KEYS) { try { state.md[k] = window[k]; } catch (e) {} }
+    for (const name of Object.keys(_OVERRIDE_LS)) state.overrides[name] = _overrideRef(name) || {};
+    // Inert JSON payload — neutralize any literal closing-script sequence in
+    // the data so it can't break out of the script element.
+    const json = JSON.stringify(state).replace(/<\/script>/gi, '<\\/script>');
+
+    let html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+    // Drop any prior baked block so re-saving never stacks them.
+    html = html.replace(/[ \t]*<script type="application\/json" id="__baked_state">[\s\S]*?<\/script>\r?\n?/i, '');
+    // Inject the fresh block right after <body> so it is in the DOM before
+    // init() (runs on window 'load') reads it.
+    const tag = '<script type="application/json" id="__baked_state">' + json + '<\/script>\n';
+    if (/<body[^>]*>/i.test(html)) html = html.replace(/(<body[^>]*>)/i, '$1\n' + tag);
+    else html = html.replace(/<\/body>/i, tag + '</body>');
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'Geron_SOP_Scenario_Planner.html';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+    if (typeof toast === 'function') {
+      toast('💾 Working file downloaded — share THIS file. It carries all master data + overrides.');
+    }
+  } catch (e) {
+    alert('Could not generate the working file: ' + (e && e.message ? e.message : e));
+  }
 }
 
 function openMasterDataModal() {
@@ -9485,10 +9613,13 @@ function runCombinedPoolTab() {
     <!-- Footer -->
     <div style="padding:8px 18px;border-top:1px solid var(--border);background:rgba(26,43,94,0.02);font-size:10px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
       <span id="md-footer-summary" style="flex:1;min-width:0;"></span>
-      <span style="color:var(--muted);">Edits auto-save on every change.</span>
+      <span style="color:var(--muted);">Edits auto-save <strong>in this browser</strong>. Use <strong>Save working file</strong> to make them portable / shareable.</span>
+      <button onclick="mdDownloadWorkingFile()"
+              title="Download a copy of this tool with ALL master data + overrides baked into the file itself. That downloaded HTML becomes the shared source of truth — open it on any machine or send it to a colleague and every change is there. This is what you share."
+              style="font-size:11px;padding:5px 14px;background:#1a7a40;color:#fff;border:none;border-radius:4px;font-weight:700;cursor:pointer;">💾 Save working file</button>
       <button onclick="mdSaveAll()"
-              title="Force a snapshot of every Master Data table to localStorage. Edits already auto-save on each change — this button is here for reassurance."
-              style="font-size:11px;padding:5px 14px;background:var(--navy);color:#fff;border:none;border-radius:4px;font-weight:700;cursor:pointer;">💾 Save</button>
+              title="Snapshot every Master Data table to this browser's local storage. Edits already auto-save on each change — this is local to this browser only and does NOT travel with the file. To share, use Save working file."
+              style="font-size:11px;padding:5px 14px;background:transparent;color:var(--navy);border:1px solid var(--navy);border-radius:4px;font-weight:700;cursor:pointer;">Save (this browser)</button>
       <button onclick="mdResetToWorkbook()"
               title="Wipe persisted Master Data edits and reload the workbook defaults. Affects only the top-level data tables — lot / supplier / dependency / starting-BI override layers have their own reset paths."
               style="font-size:11px;padding:5px 14px;background:transparent;color:var(--red);border:1px solid var(--red);border-radius:4px;font-weight:700;cursor:pointer;">↺ Reset to workbook</button>
