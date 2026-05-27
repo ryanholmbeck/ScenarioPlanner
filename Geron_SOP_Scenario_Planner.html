@@ -1275,7 +1275,7 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
         <div class="card-header">
           <div>
             <div class="card-title" id="title-supplyplan">Supply Plan — Pegged Requirements</div>
-            <div class="card-subtitle">Date-ordered ledger for the spotlight product: opening stock, forecast demand, and planned / firm orders. Each order <b>starts</b> on its Start Date and <b>delivers</b> (its Reqt lands in stock) on the Due Date, Mfg-LT months later. Projected Inventory and MoS run forward across every line.</div>
+            <div class="card-subtitle">Date-ordered ledger for the spotlight product: opening stock, forecast demand, and planned / firm orders. Each order <b>starts</b> on its Start Date and <b>delivers</b> (its Reqt lands in stock) on the Due Date, Mfg-LT months later. Projected Inventory and MoS run forward across every line. <b>Click any line</b> to drill into its pegging — which demand an order covers, or which orders cover a demand.</div>
           </div>
           <div id="supplyplan-kpi" style="font-size:11px;color:var(--muted);white-space:nowrap;"></div>
         </div>
@@ -4605,7 +4605,7 @@ function renderSupplyPlanTab(product, scenRows, meta) {
       events.push({
         date: due, sort: 1,
         cat: firm ? 'Firm / Committed' : 'Planned Order',
-        details: `WO-${r.month.slice(0, 7).replace('-', '')} · ${batches} batch${batches === 1 ? '' : 'es'}`,
+        details: `WO-${r.month.slice(0, 7).replace('-', '')}` + (batches >= 1 ? ` · ${batches} batch${batches === 1 ? '' : 'es'}` : ''),
         supplier: r.supplier || (meta && meta.supplier) || '—',
         start: r.month, reqt: rel,
       });
@@ -4614,11 +4614,59 @@ function renderSupplyPlanTab(product, scenRows, meta) {
   // Date asc; within a date supply (sort 1) lands before demand (sort 2).
   events.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.sort - b.sort));
 
+  // ── FIFO pegging: allocate each supply to the demand it satisfies ───────
+  // Walk demand in date order; draw from the earliest-available supply whose
+  // delivery date <= the demand's date. Record the link on both sides, so an
+  // order knows which demand months it covers and a demand knows its sources.
+  // Supply left over = carried as ending inventory; demand left over =
+  // uncovered shortfall (no supply available in time).
+  const supplies = [];
+  const demands  = [];
+  events.forEach((e, idx) => {
+    e._idx  = idx;
+    e._pegs = [];
+    if (e.cat === 'Demand')      { e._rem = -e.reqt; demands.push(e); }
+    else if (e.reqt > 0)         { e._rem = e.reqt;  supplies.push(e); }
+    else                         { e._rem = 0; }
+  });
+  const byDate = (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.sort - b.sort);
+  supplies.sort(byDate);
+  demands.sort(byDate);
+  demands.forEach(d => {
+    for (const s of supplies) {
+      if (d._rem <= 0.0001) break;
+      if (s.date > d.date || s._rem <= 0.0001) continue;
+      const take = Math.min(s._rem, d._rem);
+      s._rem -= take; d._rem -= take;
+      s._pegs.push({ date: d.date, units: take });
+      d._pegs.push({ date: s.date, units: take, cat: s.cat, details: s.details, supplier: s.supplier });
+    }
+  });
+
   const catPill = {
     'Opening Stock':    'background:#e5e7eb;color:#374151;',
     'Demand':           'background:#fee2e2;color:#991b1b;',
     'Firm / Committed': 'background:#fff3cd;color:#92400e;',
     'Planned Order':    'background:#dbeafe;color:#1e40af;',
+  };
+
+  // Build the inline peg-detail panel HTML for one event.
+  const pegDetail = e => {
+    if (e.cat === 'Demand') {
+      let lines = e._pegs.map(p =>
+        `<div style="padding:1px 0;">• <b>${fmtU(p.units)}</b> from ${monthLabel(p.date)} ${p.cat === 'Opening Stock' ? 'opening stock' : `delivery — ${p.details}${p.supplier ? ` · ${p.supplier}` : ''}`}</div>`
+      ).join('');
+      if (e._rem > 0.5) lines += `<div style="padding:1px 0;color:#dc2626;font-weight:600;">• <b>${fmtU(e._rem)}</b> uncovered (shortfall — no supply available in time)</div>`;
+      if (!lines) lines = `<div style="color:var(--muted);">No supply pegged.</div>`;
+      return `<div style="padding:7px 12px 7px 30px;font-size:11px;"><div style="font-weight:700;color:var(--navy);margin-bottom:3px;">Covered by</div>${lines}</div>`;
+    }
+    let lines = e._pegs.map(p =>
+      `<div style="padding:1px 0;">• <b>${fmtU(p.units)}</b> → ${monthLabel(p.date)} demand</div>`
+    ).join('');
+    if (e._rem > 0.5) lines += `<div style="padding:1px 0;color:var(--muted);">• <b>${fmtU(e._rem)}</b> carried to ending inventory (not yet consumed)</div>`;
+    if (!lines) lines = `<div style="color:var(--muted);">Held as inventory — no demand pegged within the window.</div>`;
+    const hdr = e.cat === 'Opening Stock' ? 'Opening stock consumed by' : 'Pegged to demand';
+    return `<div style="padding:7px 12px 7px 30px;font-size:11px;"><div style="font-weight:700;color:var(--navy);margin-bottom:3px;">${hdr}</div>${lines}</div>`;
   };
 
   let avail = 0;
@@ -4631,8 +4679,9 @@ function renderSupplyPlanTab(product, scenRows, meta) {
     const reqtCol = e.cat === 'Demand' ? '#dc2626' : (e.reqt > 0 ? '#1a7a40' : 'var(--muted)');
     const pill    = catPill[e.cat] || 'background:#e5e7eb;color:#374151;';
     const mosStyle = (critMOH && mos < critMOH) ? 'color:#dc2626;font-weight:700;' : '';
-    return `<tr>
-      <td style="white-space:nowrap;">${monthLabel(e.date)}</td>
+    const i = e._idx;
+    const main = `<tr onclick="toggleSupplyPeg(${i})" style="cursor:pointer;" title="Click to see pegging detail">
+      <td style="white-space:nowrap;"><span id="sp-c-${i}" style="display:inline-block;width:11px;color:var(--muted);">▸</span>${monthLabel(e.date)}</td>
       <td><span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;${pill}">${e.cat}</span></td>
       <td style="white-space:nowrap;">${e.details}</td>
       <td style="white-space:nowrap;">${e.supplier || ''}</td>
@@ -4642,14 +4691,28 @@ function renderSupplyPlanTab(product, scenRows, meta) {
       <td style="text-align:right;font-weight:600;white-space:nowrap;">${fmtU(dispInv)}</td>
       <td style="text-align:right;white-space:nowrap;${mosStyle}">${mos === Infinity ? '∞' : mos.toFixed(1)}</td>
     </tr>`;
+    const det = `<tr id="sp-det-${i}" style="display:none;"><td colspan="9" style="background:rgba(26,43,94,0.04);padding:0;border-bottom:1px solid var(--border);">${pegDetail(e)}</td></tr>`;
+    return main + det;
   }).join('');
 
   const orders = events.filter(e => e.cat === 'Firm / Committed' || e.cat === 'Planned Order');
+  const shortfall = demands.reduce((a, d) => a + Math.max(d._rem, 0), 0);
   const kpi = document.getElementById('supplyplan-kpi');
   if (kpi) {
     const span = events.length ? `${monthLabel(events[0].date)} – ${monthLabel(events[events.length - 1].date)}` : '';
-    kpi.textContent = `${orders.length} order${orders.length === 1 ? '' : 's'} · ${span}`;
+    kpi.innerHTML = `${orders.length} order${orders.length === 1 ? '' : 's'} · ${span}` +
+      (shortfall > 0.5 ? ` · <span style="color:#dc2626;font-weight:700;">${fmtU(shortfall)} ${unit} uncovered</span>` : '');
   }
+}
+
+// Toggle the inline pegging-detail row beneath a Supply Plan ledger line.
+function toggleSupplyPeg(i) {
+  const d = document.getElementById('sp-det-' + i);
+  const c = document.getElementById('sp-c-' + i);
+  if (!d) return;
+  const open = d.style.display !== 'none';
+  d.style.display = open ? 'none' : '';
+  if (c) c.textContent = open ? '▸' : '▾';
 }
 
 function updateProductionTab(product, baseRows, scenRows, meta) {
