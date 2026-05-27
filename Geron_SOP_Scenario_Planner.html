@@ -4461,7 +4461,7 @@ function updateProductionTab(product, baseRows, scenRows, meta) {
   // Rows show production STARTS (release) — when to begin a batch — with a
   // Delivers column (start + Mfg LT) for when the material lands in stock.
   // Months with no start are skipped so the table reads as a schedule.
-  const _rel = r => (r.release != null ? r.release : (r.prod || 0));
+  // (_rel is defined above for the chart; reused here.)
   const _delivers = r => monthLabel(_monthMinus(r.month, -(r.leadTime || r.deliverLT || 0)));
   const thead = document.getElementById('tbl-production-head');
   if (thead) {
