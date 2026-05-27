@@ -764,7 +764,7 @@
       <div class="card">
         <div class="card-header">
           <div class="card-title" id="title-prod-chart">Proposed Production Schedule (MRP Sim)</div>
-          <div class="card-subtitle">Base (solid bar) vs Scenario (outlined bar) — batch-rounded</div>
+          <div class="card-subtitle">Bars = production <b>starts</b> (when to begin a batch). Material delivers Mfg-LT months later and lands in the Inventory tab's EI then.</div>
         </div>
         <div class="chart-container" style="height:220px;">
           <canvas id="chart-production"></canvas>
@@ -4409,8 +4409,12 @@ function updateProductionTab(product, baseRows, scenRows, meta) {
   _renderCapacityFlags(product, scenRows, meta);
   const horizon = Math.min(baseRows.length, scenRows.length);
   const pMonths = baseRows.slice(0, horizon).map(r => r.month);
-  const bProd_r = baseRows.slice(0, horizon).map(r => r.prod);
-  const sProd_r = scenRows.slice(0, horizon).map(r => r.prod);
+  // The Production Schedule chart shows production STARTS (when to begin a
+  // batch) — that's the actionable "when is the next batch due" view. The
+  // material's delivery (start + Mfg LT) drives the Inventory tab's EI.
+  const _rel = r => (r.release != null ? r.release : (r.prod || 0));
+  const bProd_r = baseRows.slice(0, horizon).map(_rel);
+  const sProd_r = scenRows.slice(0, horizon).map(_rel);
   const prodAgg = aggregateSeries(pMonths, bProd_r, sProd_r);
   const labels  = prodAgg.labels;
   const bProd   = prodAgg.series[0], sProd = prodAgg.series[1];
@@ -4454,53 +4458,66 @@ function updateProductionTab(product, baseRows, scenRows, meta) {
     ? `<th>${companionLabel} Prod (${unit})</th>` : '';
 
   // ── Plan-aware header + rows ──────────────────────────────────────────
-  // Base Plan / Scenario (no compare): one clean block (batches + units).
-  // Compare: full Base + Scenario + Δ.
+  // Rows show production STARTS (release) — when to begin a batch — with a
+  // Delivers column (start + Mfg LT) for when the material lands in stock.
+  // Months with no start are skipped so the table reads as a schedule.
+  const _rel = r => (r.release != null ? r.release : (r.prod || 0));
+  const _delivers = r => monthLabel(_monthMinus(r.month, -(r.leadTime || r.deliverLT || 0)));
   const thead = document.getElementById('tbl-production-head');
   if (thead) {
     thead.innerHTML = compare
-      ? `<tr><th>Month</th>
-           <th>Base Prod (batches)</th><th>Base Prod (${unit})</th>
-           <th>Scen Prod (batches)</th><th>Scen Prod (${unit})</th>
+      ? `<tr><th>Start month</th>
+           <th>Base Start (batches)</th><th>Base Start (${unit})</th>
+           <th>Scen Start (batches)</th><th>Scen Start (${unit})</th>
            ${compColHdr}
-           <th>Δ Batches</th><th>Δ ${_unitCap}</th><th>Release Month</th></tr>`
-      : `<tr><th>Month</th><th>Prod (batches)</th><th>Prod (${unit})</th>${compColHdr}<th>Release Month</th></tr>`;
+           <th>Δ Batches</th><th>Δ ${_unitCap}</th><th>Delivers</th></tr>`
+      : `<tr><th>Start month</th><th>Start (batches)</th><th>Start (${unit})</th>${compColHdr}<th>Delivers</th></tr>`;
   }
 
   const tbody = document.querySelector('#tbl-production tbody');
   tbody.innerHTML = '';
+  let shown = 0;
   for (let i = 0; i < horizon; i++) {
     const b = baseRows[i], s = scenRows[i];
     if (!b || !s) continue;
-    const compProd = combineActive && compScenRowsLocal[i] ? (compScenRowsLocal[i].prod || 0) : null;
+    const bRel = _rel(b), sRel = _rel(s);
+    const r = isBasePlan() ? b : s;
+    const rRel = _rel(r);
+    // Skip months with no production start in the relevant series.
+    if (compare ? (bRel <= 0 && sRel <= 0) : (rRel <= 0 && !r.cancelled)) continue;
+    shown++;
+    const compProd = combineActive && compScenRowsLocal[i] ? (_rel(compScenRowsLocal[i]) || 0) : null;
     const compCell = combineActive
       ? `<td style="color:var(--muted);font-style:italic;">${compProd > 0 ? fmtQty(compProd,meta) : '—'}</td>` : '';
     const cancelBadge = s.cancelled
       ? ' <span style="font-size:9px;font-weight:700;background:#dc2626;color:#fff;border-radius:3px;padding:1px 5px;">CANCELLED</span>'
       : '';
     if (compare) {
-      const dB = Math.round(s.prod/bSize) - Math.round(b.prod/bSize);
-      const dU = s.prod - b.prod;
+      const dB = Math.round(sRel/bSize) - Math.round(bRel/bSize);
+      const dU = sRel - bRel;
       tbody.innerHTML += `<tr>
         <td>${monthLabel(b.month)}</td>
-        <td>${fmt(Math.round(b.prod/bSize))}</td><td>${fmtQty(b.prod,meta)}</td>
-        <td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmt(Math.round(s.prod/bSize))}</td><td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmtQty(s.prod,meta)}${cancelBadge}</td>
+        <td>${fmt(Math.round(bRel/bSize))}</td><td>${fmtQty(bRel,meta)}</td>
+        <td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmt(Math.round(sRel/bSize))}</td><td${s.cancelled ? ' style="color:#dc2626;font-weight:600;"' : ''}>${fmtQty(sRel,meta)}${cancelBadge}</td>
         ${compCell}
         <td class="${dB>0?'diff-pos':dB<0?'diff-neg':'diff-neu'}">${dB>0?'+':''}${dB}</td>
         <td class="${dU>0?'diff-pos':dU<0?'diff-neg':'diff-neu'}">${dU>0?'+':''}${fmtQty(dU,meta)}</td>
-        <td>${monthLabel(b.rm || b.month)}</td>
+        <td>${_delivers(b)}</td>
       </tr>`;
     } else {
-      const r = isBasePlan() ? b : s;
       const cb = (!isBasePlan() && r.cancelled) ? cancelBadge : '';
       const cancelStyle = (!isBasePlan() && r.cancelled) ? ' style="color:#dc2626;font-weight:600;"' : '';
       tbody.innerHTML += `<tr>
         <td>${monthLabel(r.month)}</td>
-        <td${cancelStyle}>${fmt(Math.round(r.prod/bSize))}</td><td${cancelStyle}>${fmtQty(r.prod,meta)}${cb}</td>
+        <td${cancelStyle}>${fmt(Math.round(rRel/bSize))}</td><td${cancelStyle}>${fmtQty(rRel,meta)}${cb}</td>
         ${compCell}
-        <td>${monthLabel(r.rm || r.month)}</td>
+        <td>${_delivers(r)}</td>
       </tr>`;
     }
+  }
+  if (!shown) {
+    const cols = compare ? (combineActive ? 9 : 8) : (combineActive ? 5 : 4);
+    tbody.innerHTML = `<tr><td colspan="${cols}" style="text-align:center;color:var(--muted);padding:14px;font-style:italic;">No production starts scheduled in the view window.</td></tr>`;
   }
   // Re-render override table so it stays in sync with base schedule
   renderProdOverrideTable();
