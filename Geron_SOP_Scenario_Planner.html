@@ -833,7 +833,7 @@
                 <th style="text-align:right;" id="prod-ov-th-base-units">Base Units</th>
                 <th style="text-align:center;min-width:90px;">Scen Batches</th>
                 <th style="text-align:right;" id="prod-ov-th-delta-units">Δ Units</th>
-                <th title="When child-tier demand lands for this batch (DS for DP, DP for LP). Auto-derived from the parent supplier's Mfg LT + Alloc LT — edit to override when a one-off batch is routed to a non-primary supplier whose lead times differ from the registry pick. Clear to revert to auto.">Alloc Date</th>
+                <th title="When this batch DELIVERS into inventory. Auto-derived from the production start month + the active supplier's Mfg LT.">Delivery Date</th>
                 <th style="text-align:center;">Actions</th>
               </tr>
             </thead>
@@ -1938,6 +1938,7 @@ function _monthMinus(monthIso, n) {
   const dt = new Date(Date.UTC(y, m - 1 - n, 1));
   return dt.toISOString().slice(0, 10).replace(/-\d{2}$/, '-01');
 }
+function _monthPlus(monthIso, n) { return _monthMinus(monthIso, -n); }
 
 // Build child demand map from a parent's scenario production schedule.
 // Returns: { childMonthIso: unitsDemand }
@@ -2516,6 +2517,29 @@ function renderProdOverrideTable() {
     r.prod > 0 || overrideMap[r.month] !== undefined
   );
 
+  // ── MRP-recommended batches ─────────────────────────────────────────────
+  // Surface auto-reorder production the MRP engine scheduled (release > 0)
+  // for months that carry NO committed base AND NO user override. They show
+  // with a distinct "MRP" status and the same editable controls, so the
+  // planner can accept the suggestion as-is or firm/adjust it — editing
+  // creates a normal override (a firm planned order).
+  const _shownMonths = new Set(showRows.map(r => r.month));
+  let _cascKey = product;
+  if (/EU Stock/i.test(product) && typeof _parentOfEUStock === 'function') {
+    _cascKey = _parentOfEUStock(product) || product;
+  }
+  const _casc = (window.__cascade && window.__cascade.byProduct && window.__cascade.byProduct[_cascKey])
+    || (window.__baseCascade && window.__baseCascade.byProduct && window.__baseCascade.byProduct[_cascKey])
+    || [];
+  _casc.forEach(cr => {
+    const rel = cr.release || 0;
+    if (rel > 0 && !_shownMonths.has(cr.month)) {
+      showRows.push({ month: cr.month, prod: 0, _mrp: true, _mrpUnits: rel });
+      _shownMonths.add(cr.month);
+    }
+  });
+  showRows.sort((a, b) => a.month.localeCompare(b.month));
+
   // Unit-aware label on the table header — DS shows "Base kg" / "Δ kg",
   // LP/DP stay "Base Units" / "Δ Units".
   const unitLabel = (meta && meta.unit) || 'units';
@@ -2571,7 +2595,8 @@ function renderProdOverrideTable() {
     const isRouted = !!(r.supplier && namedEff && r.supplier !== regName);
 
     const baseBatches = bs > 0 ? Math.round(r.prod / bs) : 0;
-    const scenBatches = hasOverride ? ovBatches : baseBatches;
+    const mrpBatches  = (r._mrp && bs > 0) ? Math.round((r._mrpUnits || 0) / bs) : 0;
+    const scenBatches = hasOverride ? ovBatches : (r._mrp ? mrpBatches : baseBatches);
     const baseUnits   = r.prod;
     const scenUnits   = scenBatches * bs;
     const deltaUnits  = scenUnits - baseUnits;
@@ -2580,31 +2605,24 @@ function renderProdOverrideTable() {
 
     const rowBg = hasOverride
       ? (isBinding ? 'background:#fff3cd;' : 'background:#e8f5e9;')
-      : (isBinding ? 'background:rgba(255,163,0,0.08);' : '');
+      : (r._mrp ? 'background:#eff6ff;'
+      : (isBinding ? 'background:rgba(255,163,0,0.08);' : ''));
 
     const statusLabel = isBinding
       ? `<span style="font-size:10px;background:#FFA300;color:#003B5C;padding:1px 6px;border-radius:8px;font-weight:700;">BINDING</span>`
-      : `<span style="font-size:10px;background:#d1fae5;color:#065f46;padding:1px 6px;border-radius:8px;font-weight:700;">OPEN</span>`;
+      : (r._mrp && !hasOverride)
+        ? `<span title="MRP-recommended order — edit to firm/adjust." style="font-size:10px;background:#dbeafe;color:#1e40af;padding:1px 6px;border-radius:8px;font-weight:700;">MRP</span>`
+        : `<span style="font-size:10px;background:#d1fae5;color:#065f46;padding:1px 6px;border-radius:8px;font-weight:700;">OPEN</span>`;
 
-    // Auto-derived child allocation month from the active supplier's LTs.
-    // If the user has explicitly set allocationOverrides[product][month],
-    // that wins and gets a gold-bordered input + revert button so it's
-    // obvious that this row is escaping the LT math.
-    const _mfg   = Math.round((regSup && regSup.lead_time     != null) ? regSup.lead_time     : (meta.lead_time     || 0));
-    const _alloc = Math.round((regSup && regSup.allocation_lt != null) ? regSup.allocation_lt : (meta.allocation_lt || 0));
-    const _autoAllocMonth = _monthMinus(r.month, _mfg + _alloc).slice(0,7);  // YYYY-MM
-    const _allocOv = (typeof getAllocationOverride === 'function') ? getAllocationOverride(product, r.month) : null;
-    const _allocDisp = _allocOv ? _allocOv.slice(0,7) : _autoAllocMonth;
-    const _allocStyle = _allocOv ? 'border:1px solid var(--gold);background:#fffbeb;font-weight:700;' : '';
+    // Delivery date — when this batch DELIVERS into inventory: production
+    // start (the row month) + the active supplier's Mfg LT. Read-only; it
+    // moves automatically when the start month or supplier (→ Mfg LT) change.
+    const _mfg = Math.round((regSup && regSup.lead_time != null) ? regSup.lead_time : (meta.lead_time || 0));
+    const _deliveryMonth = _monthPlus(r.month, _mfg);
     const _allocCell = `
-      <td style="text-align:center;white-space:nowrap;">
-        <input type="month" value="${_allocDisp}"
-          title="${_allocOv ? 'Per-batch override — auto-derived was ' + _autoAllocMonth : 'Auto-derived from Mfg LT ' + _mfg + ' + Alloc LT ' + _alloc + ' (supplier: ' + supName + ')'}"
-          style="font-size:11px;padding:1px 3px;width:110px;${_allocStyle}"
-          onchange="setAllocationOverride('${safe(product)}','${r.month}', this.value ? this.value + '-01' : null)">
-        ${_allocOv ? `<button onclick="setAllocationOverride('${safe(product)}','${r.month}', null)"
-          title="Revert to auto-derived (${_autoAllocMonth})"
-          style="margin-left:3px;font-size:10px;padding:1px 5px;background:transparent;border:1px solid var(--muted);border-radius:3px;color:var(--muted);cursor:pointer;">↺</button>` : ''}
+      <td style="text-align:center;white-space:nowrap;color:var(--text);"
+          title="Delivers ${_mfg} mo after start (supplier: ${supName})">
+        ${monthLabel(_deliveryMonth)}
       </td>`;
 
     // Supplier dropdown — options are every supplier registered for this
@@ -2633,14 +2651,14 @@ function renderProdOverrideTable() {
       <td style="text-align:right;">${fmtBS(baseUnits)}</td>
       <td style="text-align:center;">
         <div style="display:flex;align-items:center;justify-content:center;gap:4px;">
-          <button onclick="adjProdOverride('${product}','${r.month}',${bs},-1)"
+          <button onclick="adjProdOverride('${product}','${r.month}',${bs},-1${r._mrp ? ',' + scenBatches : ''})"
             style="width:22px;height:22px;border:1px solid var(--border);border-radius:4px;background:var(--card);cursor:pointer;font-size:13px;line-height:1;color:var(--text);">−</button>
           <input type="number" min="0" step="1"
             style="width:50px;text-align:center;padding:2px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--card);color:var(--text);"
             value="${scenBatches}"
             onchange="setProdOverride('${product}','${r.month}',Math.max(0,parseInt(this.value)||0))"
             ${isBinding ? 'title="Binding period — override with caution"' : ''}>
-          <button onclick="adjProdOverride('${product}','${r.month}',${bs},+1)"
+          <button onclick="adjProdOverride('${product}','${r.month}',${bs},+1${r._mrp ? ',' + scenBatches : ''})"
             style="width:22px;height:22px;border:1px solid var(--border);border-radius:4px;background:var(--card);cursor:pointer;font-size:13px;line-height:1;color:var(--text);">+</button>
         </div>
       </td>
@@ -2658,16 +2676,18 @@ function renderProdOverrideTable() {
   }).join('');
 }
 
-function adjProdOverride(product, month, batchSize, delta) {
+function adjProdOverride(product, month, batchSize, delta, seed) {
   const overrideMap = prodOverrides[product] || {};
   const meta        = getMeta(product);
   const bs          = batchSize || meta.batch_size || 1;
   const baseRow     = PROD_DATA.find(r => r.product === product && r.month === month);
   const baseBatches = baseRow ? Math.round((baseRow.prod || 0) / bs) : 0;
   const raw         = overrideMap[month];
+  // No committed base and no override → start from the MRP-recommended count
+  // (seed) when one was passed, otherwise the base schedule.
   const current     = (typeof raw === 'number') ? raw
                     : (raw && typeof raw.batches === 'number') ? raw.batches
-                    : baseBatches;
+                    : (seed != null ? seed : baseBatches);
   setProdOverride(product, month, Math.max(0, current + delta));
 }
 
@@ -2865,7 +2885,8 @@ function runMRP(baseRows, salesFactor, meta, horizonMonths, product, opts) {
     let ei = bi - rows[i].demand + arrivals[i];
 
     // MRP reorder — only outside binding and runout (those are committed-only).
-    if (!runoutMode && !inBinding && avgFut[i] > 0 && bsOf(i) > 0) {
+    const _suppressed = suppressPostBinding && bindingThrough && rows[i].month >= bindingThrough;
+    if (!runoutMode && !inBinding && !_suppressed && avgFut[i] > 0 && bsOf(i) > 0) {
       const lt = ltOf(i);
       const hIdx = Math.min(i + lt, n - 1);
       const targetEI    = (P[hIdx].targetMOH    || 0) * avgFut[hIdx];
