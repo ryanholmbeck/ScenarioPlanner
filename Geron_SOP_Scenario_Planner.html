@@ -2885,8 +2885,12 @@ function runMRP(baseRows, salesFactor, meta, horizonMonths, product, opts) {
     let ei = bi - rows[i].demand + arrivals[i];
 
     // MRP reorder — only outside binding and runout (those are committed-only).
+    // A month the planner explicitly CANCELLED (override = 0 batches) is also
+    // skipped: the cancel is a firm "do not produce here" instruction, so the
+    // engine must not silently re-schedule a fresh batch back into that month.
+    // (Any genuine shortfall surfaces as a reorder in an adjacent month.)
     const _suppressed = suppressPostBinding && bindingThrough && rows[i].month >= bindingThrough;
-    if (!runoutMode && !inBinding && !_suppressed && avgFut[i] > 0 && bsOf(i) > 0) {
+    if (!runoutMode && !inBinding && !_suppressed && !cancelledAt[i] && avgFut[i] > 0 && bsOf(i) > 0) {
       const lt = ltOf(i);
       const hIdx = Math.min(i + lt, n - 1);
       const targetEI    = (P[hIdx].targetMOH    || 0) * avgFut[hIdx];
@@ -4504,8 +4508,11 @@ function updateProductionTab(product, baseRows, scenRows, meta) {
     const bRel = _rel(b), sRel = _rel(s);
     const r = isBasePlan() ? b : s;
     const rRel = _rel(r);
-    // Skip months with no production start in the relevant series.
-    if (compare ? (bRel <= 0 && sRel <= 0) : (rRel <= 0 && !r.cancelled)) continue;
+    // Skip months with no production start in the relevant series. A
+    // cancelled month now drops out entirely (rRel === 0) so a cancelled
+    // batch is removed from this schedule — the Production Schedule Override
+    // card above remains the place to see/undo it.
+    if (compare ? (bRel <= 0 && sRel <= 0) : (rRel <= 0)) continue;
     shown++;
     const compProd = combineActive && compScenRowsLocal[i] ? (_rel(compScenRowsLocal[i]) || 0) : null;
     const compCell = combineActive
@@ -9063,6 +9070,52 @@ function runCombinedPoolTab() {
   let poolBI = (lpScen[0]?.bi || 0) + (dpScen[0]?.bi || 0);
 
   const scenRows = [];
+  const r2 = n => Math.round(n * 100) / 100;
+
+  // ── Lead-time-aware production (mirrors runMRP) ─────────────────────────
+  // A batch that STARTS in month m delivers (grows the pool) at m + Mfg LT.
+  // Seed committed + override production as releases, then shift to ARRIVALS
+  // so the pool inventory chains off DELIVERIES, not starts. Per-month lead
+  // time + batch size come from the Supplier Registry so a mid-horizon
+  // supplier transition (different LT) shifts deliveries correctly.
+  const lpArrival = new Array(len).fill(0);   // committed/override LP delivered in month i
+  const dpArrival = new Array(len).fill(0);   // committed/override DP delivered in month i
+  const dpLTof    = new Array(len).fill(0);
+  const lpCommittedStart = new Array(len).fill(0);   // raw committed LP start units (month i)
+  const dpCommittedStart = new Array(len).fill(0);
+  const lpCancelAt = new Array(len).fill(false);
+  const dpCancelAt = new Array(len).fill(false);
+  const dpFromOvAt = new Array(len).fill(false);
+  const mrpArrival = new Array(len).fill(0);   // MRP-added DP delivered in month i
+  for (let i = 0; i < len; i++) {
+    const m   = lpScen[i].month;
+    const lpP = resolveSchedParams(lpProd, m, lpMeta);
+    const dpP = resolveSchedParams(dpProd, m, dpMeta);
+    const lpLT = Math.max(0, Math.round(lpP.leadTime != null ? lpP.leadTime : (lpMeta.lead_time || 0)));
+    dpLTof[i]  = Math.max(0, Math.round(dpP.leadTime != null ? dpP.leadTime : (dpMeta.lead_time || 0)));
+    const dpBatchM = dpP.batchSize || dpMeta.batch_size || 1;
+    const lpCommitted = lpBase[i]?.prod || 0;
+    const dpCommitted = dpBase[i]?.prod || 0;
+    lpCommittedStart[i] = lpCommitted;
+    dpCommittedStart[i] = dpCommitted;
+    const lpEff = basePlan ? { units: lpCommitted, fromOverride: false, cancelled: false }
+                           : getEffectiveProd(lpProd, m, lpMeta.batch_size || 1, lpCommitted);
+    const dpEff = basePlan ? { units: dpCommitted, fromOverride: false, cancelled: false }
+                           : getEffectiveProd(dpProd, m, dpBatchM, dpCommitted);
+    lpCancelAt[i] = lpEff.cancelled;
+    dpCancelAt[i] = dpEff.cancelled;
+    dpFromOvAt[i] = dpEff.fromOverride;
+    const la = i + lpLT;       if (la < len) lpArrival[la] += lpEff.units;
+    const da = i + dpLTof[i];  if (da < len) dpArrival[da] += dpEff.units;
+  }
+
+  // Avg future LP demand (next 12 months) at each month — drives MOH + safety.
+  const avgFut = new Array(len);
+  for (let i = 0; i < len; i++) {
+    let fd = 0, fc = 0;
+    for (let j = i + 1; j <= Math.min(i + 12, len - 1); j++) { fd += lpScen[j]?.demand || 0; fc++; }
+    avgFut[i] = fc > 0 ? fd / fc : (lpScen[i]?.demand || 0);
+  }
 
   // Per-tier running inventory — the combined pool MRP only carries a single
   // pool number, but the tiered stacked-bar chart needs FDP (LP) and DP
@@ -9094,41 +9147,39 @@ function runCombinedPoolTab() {
     }
     const avgFuture = fCount > 0 ? futureDem / fCount : demand;
 
-    // ── Committed production (from PROD_DATA) — ALWAYS honored ─────────
-    const lpCommitted = lpBase[i]?.prod || 0;
-    const dpCommitted = dpBase[i]?.prod || 0;
+    // ── Production DELIVERED into the pool this month (committed + override),
+    //    lead-time-shifted: a start in month m landed here at m + Mfg LT. ──
+    const lpProdAmt = lpArrival[i];
+    let   dpProdAmt = dpArrival[i] + mrpArrival[i];
 
-    // Effective production = override-aware in Scenario mode; committed-only
-    // on the Base Plan (overrides are scenario constructs).
-    const lpEff = basePlan ? { units: lpCommitted, fromOverride: false, cancelled: false }
-                           : getEffectiveProd(lpProd, month, lpMeta.batch_size || 1, lpCommitted);
-    const dpEff = basePlan ? { units: dpCommitted, fromOverride: false, cancelled: false }
-                           : getEffectiveProd(dpProd, month, dpBatch, dpCommitted);
-    let lpProdAmt = lpEff.units;
-    let dpProdAmt = dpEff.units;
-
-    // ── SAWTOOTH MRP: schedule additional DP batches if pool short ─────
-    // Project EI after demand and committed production
+    // ── SAWTOOTH MRP (DP only): start a batch NOW if the pool would fall
+    //    below target at the DELIVERY horizon (i + dpLT). The batch lands at
+    //    i + dpLT, mirroring runMRP. Suppressed when the month carries a firm
+    //    DP override/cancel — the planner's explicit call wins.
+    const dpLT = dpLTof[i];
     let mrpAddedDP = 0;
-    if (avgFuture > 0 && dpBatch > 0 && !dpEff.fromOverride) {
-      const projectedEI_committed = poolBI - demand + lpProdAmt + dpProdAmt;
-      const targetEI    = tgtMOH       * avgFuture;
-      const overstockEI = overstockMOH * avgFuture;
-
-      if (projectedEI_committed < targetEI) {
-        const shortfall = targetEI - projectedEI_committed;
-        mrpAddedDP = _safeCeiling(shortfall, dpBatch);
-
-        // Trim back full batches if next-step EI would exceed OVERSTOCK
-        while (mrpAddedDP > dpBatch &&
-               (projectedEI_committed + mrpAddedDP - dpBatch) >= overstockEI) {
-          mrpAddedDP -= dpBatch;
-        }
-        // Always fire at least one full batch once trigger crossed
+    if (avgFuture > 0 && dpBatch > 0 && !dpFromOvAt[i]) {
+      // Project the pool balance at the delivery horizon from current BI,
+      // consuming demand and adding arrivals already scheduled before then.
+      let proj = poolBI - demand + lpProdAmt + dpProdAmt;
+      for (let j = i + 1; j <= i + dpLT; j++) {
+        const dem = (j < len) ? (lpScen[j]?.demand || 0) : (avgFut[len - 1] || 0);
+        const arr = (j < len) ? (lpArrival[j] + dpArrival[j] + mrpArrival[j]) : 0;
+        proj += arr - dem;
+      }
+      const hIdx        = Math.min(i + dpLT, len - 1);
+      const avgH        = avgFut[hIdx] || avgFuture;
+      const targetEI    = tgtMOH       * avgH;
+      const overstockEI = overstockMOH * avgH;
+      if (proj < targetEI) {
+        mrpAddedDP = _safeCeiling(targetEI - proj, dpBatch);
+        // Trim back full batches if delivery would push past OVERSTOCK.
+        while (mrpAddedDP > dpBatch && (proj + mrpAddedDP - dpBatch) >= overstockEI) mrpAddedDP -= dpBatch;
         if (mrpAddedDP < dpBatch) mrpAddedDP = dpBatch;
+        const a = i + dpLT;
+        if (a < len) { mrpArrival[a] += mrpAddedDP; if (a === i) dpProdAmt += mrpAddedDP; }
       }
     }
-    dpProdAmt += mrpAddedDP;
 
     // Pool EI = BI − demand + (LP committed + DP committed + MRP-added DP)
     // LP committed contributes because LP IS finished drug — same physical
@@ -9172,23 +9223,24 @@ function runCombinedPoolTab() {
     scenRows.push({
       month:     month,
       ml:        lpRow.ml,
-      bi:        Math.round(poolBI * 100) / 100,
-      demand:    Math.round(demand * 100) / 100,
-      lpProd:    Math.round(lpProdAmt * 100) / 100,
-      dpProd:    Math.round(dpProdAmt * 100) / 100,
-      prod:      Math.round(dpProdAmt * 100) / 100,
-      ei:        Math.round(poolEI * 100) / 100,
+      bi:        r2(poolBI),
+      demand:    r2(demand),
+      lpProd:    r2(lpProdAmt),                 // LP delivered into the pool this month
+      dpProd:    r2(dpProdAmt),                 // DP delivered into the pool this month (incl. MRP)
+      prod:      r2(dpProdAmt),
+      dpArrComm: r2(dpArrival[i]),              // committed/override DP delivered (excludes MRP)
+      ei:        r2(poolEI),
       lpEI:      Math.round(lpEI),
       dpEI:      Math.round(dpEI),
-      moh:       Math.round(moh * 100) / 100,
+      moh:       r2(moh),
       risk,
       supplier:  dpSupParams.supplier,
       batchSize: dpBatch,
-      mrpAdded:  Math.round(mrpAddedDP),
-      lpCommitted: Math.round(lpCommitted),
-      dpCommitted: Math.round(dpCommitted),
-      lpCancelled: lpEff.cancelled,
-      dpCancelled: dpEff.cancelled,
+      mrpAdded:  Math.round(mrpArrival[i]),     // MRP-added DP delivered this month
+      lpCommitted: Math.round(lpCommittedStart[i]),
+      dpCommitted: Math.round(dpCommittedStart[i]),
+      lpCancelled: lpCancelAt[i],
+      dpCancelled: dpCancelAt[i],
     });
     poolBI = poolEI;
   }
@@ -9513,9 +9565,10 @@ function runCombinedPoolTab() {
     }
   });
 
-  // ── Production chart — stacked: committed DP base + MRP-added DP ──────
+  // ── Production chart — DELIVERIES into the pool, stacked: LP + committed
+  //    DP + MRP-added DP (all lead-time-shifted to their delivery month). ──
   const lpProdData = viewRows.map(r => r.lpProd);
-  const dpCommittedData = viewRows.map(r => r.dpCommitted);
+  const dpCommittedData = viewRows.map(r => r.dpArrComm);
   const dpMRPData = viewRows.map(r => r.mrpAdded);
 
   destroyChart('cpool-chart-prod');
