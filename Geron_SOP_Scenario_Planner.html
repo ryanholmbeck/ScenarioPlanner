@@ -2809,8 +2809,12 @@ function resolveSchedParams(product, monthIso, meta) {
     : (sup ? sup.critical_moh : (meta.critical_moh || 6));
   const overstockMOH = sup ? sup.overstock_moh : (meta.overstock_moh || 18);
   const binding_mo = sup ? sup.binding_mo : 0;
+  // Hard monthly capacity from the supplier contract. MRP reads this to cap
+  // its auto-add at the supplier's cap_per_month — without it, MRP would
+  // happily schedule more starts than the CMO can run. 0 ⇒ unconstrained.
+  const capPerMonth = sup ? (parseFloat(sup.cap_per_month) || 0) : 0;
   return { supplier: sup ? sup.supplier : null,
-           batchSize, leadTime, targetMOH, criticalMOH, overstockMOH, binding_mo };
+           batchSize, leadTime, targetMOH, criticalMOH, overstockMOH, binding_mo, capPerMonth };
 }
 
 // CEILING(x, sig) matching VBA SafeCeiling
@@ -2888,8 +2892,9 @@ function runMRP(baseRows, salesFactor, meta, horizonMonths, product, opts) {
   // delivery horizon (i + LT) would fall below the target safety stock.
   const n = rows.length;
   const P  = rows.map(r => resolveSchedParams(product, r.month, meta));
-  const ltOf = i => Math.max(0, Math.round(P[i].leadTime != null ? P[i].leadTime : 0));
-  const bsOf = i => P[i].batchSize || meta.batch_size || 1;
+  const ltOf  = i => Math.max(0, Math.round(P[i].leadTime != null ? P[i].leadTime : 0));
+  const bsOf  = i => P[i].batchSize || meta.batch_size || 1;
+  const capOf = i => P[i].capPerMonth || 0;     // 0 ⇒ unconstrained
 
   // Avg future demand at each month (next 12) — drives MOH + safety targets.
   const avgFut = new Array(n);
@@ -2899,9 +2904,10 @@ function runMRP(baseRows, salesFactor, meta, horizonMonths, product, opts) {
     avgFut[i] = fc > 0 ? fd / fc : rows[i].demand;
   }
 
-  const releases = new Array(n).fill(0);   // production STARTS in month i
-  const arrivals = new Array(n).fill(0);   // DELIVERIES in month i
-  const cancelledAt = new Array(n).fill(false);
+  const releases       = new Array(n).fill(0);   // production STARTS in month i
+  const arrivals       = new Array(n).fill(0);   // DELIVERIES in month i
+  const cancelledAt    = new Array(n).fill(false);
+  const fromOverrideAt = new Array(n).fill(false);
 
   // 1) Seed committed / override releases (treated as production STARTS).
   for (let i = 0; i < n; i++) {
@@ -2909,7 +2915,7 @@ function runMRP(baseRows, salesFactor, meta, horizonMonths, product, opts) {
     let rel = committed;
     if (!baseMode && product) {
       const eff = getEffectiveProd(product, rows[i].month, bsOf(i), committed);
-      if (eff.fromOverride) { rel = eff.units; cancelledAt[i] = !!eff.cancelled; }
+      if (eff.fromOverride) { rel = eff.units; cancelledAt[i] = !!eff.cancelled; fromOverrideAt[i] = true; }
       if (runoutMode && !eff.fromOverride) rel = 0;
       if (suppressPostBinding && bindingThrough && rows[i].month >= bindingThrough && !eff.fromOverride) rel = 0;
     }
@@ -2931,12 +2937,13 @@ function runMRP(baseRows, salesFactor, meta, horizonMonths, product, opts) {
     let ei = bi - rows[i].demand + arrivals[i];
 
     // MRP reorder — only outside binding and runout (those are committed-only).
-    // A month the planner explicitly CANCELLED (override = 0 batches) is also
-    // skipped: the cancel is a firm "do not produce here" instruction, so the
-    // engine must not silently re-schedule a fresh batch back into that month.
-    // (Any genuine shortfall surfaces as a reorder in an adjacent month.)
+    // Skipped when:
+    //   • month i was explicitly CANCELLED (override = 0) — firm "no production"
+    //   • month i carries any other firm OVERRIDE — the planner's count wins,
+    //     MRP must not silently top up a hand-set quantity
+    // Any genuine shortfall surfaces as a reorder in an adjacent month instead.
     const _suppressed = suppressPostBinding && bindingThrough && rows[i].month >= bindingThrough;
-    if (!runoutMode && !inBinding && !_suppressed && !cancelledAt[i] && avgFut[i] > 0 && bsOf(i) > 0) {
+    if (!runoutMode && !inBinding && !_suppressed && !cancelledAt[i] && !fromOverrideAt[i] && avgFut[i] > 0 && bsOf(i) > 0) {
       const lt = ltOf(i);
       const hIdx = Math.min(i + lt, n - 1);
       const targetEI    = (P[hIdx].targetMOH    || 0) * avgFut[hIdx];
@@ -2954,10 +2961,25 @@ function runMRP(baseRows, salesFactor, meta, horizonMonths, product, opts) {
         let qty = _safeCeiling(targetEI - proj, bs);
         while (qty > bs && (proj + qty - bs) >= overstockEI) qty -= bs;
         if (qty < bs) qty = bs;
-        releases[i] += qty;                       // start now
-        const a = i + lt;
-        if (a < n) arrivals[a] += qty;            // deliver at horizon (applied when loop reaches it)
-        else ei += 0;                             // beyond window — not shown
+        // ── HARD MONTHLY CAPACITY ─────────────────────────────────────────
+        // Cap the auto-add at the supplier's cap_per_month minus whatever's
+        // already starting in this month (committed + override + any earlier
+        // MRP add). Round down to a whole batch. If even one batch won't fit,
+        // skip — the shortfall propagates and re-triggers in the next month
+        // (where capacity may be available). Committed / override starts are
+        // NOT capped — those are the planner's explicit instructions.
+        const capM = capOf(i);
+        if (capM > 0) {
+          const avail = capM - releases[i];
+          if (avail < bs)            qty = 0;
+          else if (qty > avail)      qty = Math.floor(avail / bs) * bs;
+        }
+        if (qty > 0) {
+          releases[i] += qty;                       // start now
+          const a = i + lt;
+          if (a < n) arrivals[a] += qty;            // deliver at horizon (applied when loop reaches it)
+          else ei += 0;                             // beyond window — not shown
+        }
       }
     }
     ei = Math.max(ei, 0);
