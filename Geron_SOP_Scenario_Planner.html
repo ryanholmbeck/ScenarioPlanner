@@ -1269,15 +1269,27 @@ Negative = scenario holds less value on shelf">Δ Holding $</th>
 
     </div><!-- /tab-combined -->
 
-    <!-- TAB: SUPPLY PLAN — order-level pegging ledger for the spotlight product -->
+    <!-- TAB: SUPPLY PLAN — editable pegging ledger for the spotlight product -->
     <div id="tab-supplyplan" class="tab-content">
       <div class="card">
         <div class="card-header">
           <div>
             <div class="card-title" id="title-supplyplan">Supply Plan — Pegged Requirements</div>
-            <div class="card-subtitle">Date-ordered ledger for the spotlight product: opening stock, forecast demand, and planned / firm orders. Each order <b>starts</b> on its Start Date and <b>delivers</b> (its Reqt lands in stock) on the Due Date, Mfg-LT months later. Projected Inventory and MoS run forward across every line. <b>Click any line</b> to drill into its pegging — which demand an order covers, or which orders cover a demand.</div>
+            <div class="card-subtitle">Date-ordered ledger for the spotlight product: opening stock, forecast demand, and planned / firm orders. Each order <b>starts</b> on its Start Date and <b>delivers</b> (its Reqt lands in stock) on the Due Date, Mfg-LT months later. <b>Edit batches / supplier inline on any order</b> — the ledger, pegging, projected inventory, and MoS all refresh live. <b>Click any line</b> to drill into its pegging (which orders cover a demand, or for dependent products, which parent orders drive a demand).</div>
           </div>
           <div id="supplyplan-kpi" style="font-size:11px;color:var(--muted);white-space:nowrap;"></div>
+        </div>
+        <!-- Toolbar: add new orders + reset all production overrides. -->
+        <div id="supplyplan-toolbar" style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--border);font-size:11px;background:rgba(26,43,94,0.025);">
+          <button onclick="toggleSupplyPlanAddForm()" id="sp-add-toggle" style="font-size:11px;padding:4px 10px;background:var(--navy);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;">+ Add planned order</button>
+          <span id="sp-add-form" style="display:none;gap:6px;align-items:center;">
+            <label style="display:inline-flex;align-items:center;gap:4px;">Month: <input type="month" id="sp-add-month" style="font-size:11px;padding:2px 4px;border:1px solid var(--border);border-radius:3px;"></label>
+            <label style="display:inline-flex;align-items:center;gap:4px;">Batches: <input type="number" id="sp-add-batches" min="1" value="1" style="font-size:11px;padding:2px 4px;width:60px;border:1px solid var(--border);border-radius:3px;"></label>
+            <button onclick="supplyPlanAddOrder()" style="font-size:11px;padding:3px 10px;background:#15803d;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;">Add</button>
+          </span>
+          <span style="color:var(--muted);">Edits update the ledger live — no refresh needed.</span>
+          <span style="flex:1;"></span>
+          <button onclick="if(confirm('Wipe ALL production overrides for every product?'))clearProdOverrides()" title="Clear every production schedule override across all products" style="font-size:11px;padding:3px 10px;background:transparent;border:1px solid var(--border);border-radius:4px;cursor:pointer;color:var(--muted);">↺ Reset all overrides</button>
         </div>
         <div class="table-wrap">
           <table id="tbl-supplyplan">
@@ -1978,7 +1990,7 @@ function _monthPlus(monthIso, n) { return _monthMinus(monthIso, -n); }
 //
 // EXCEPTION: allocationOverrides[parentProduct][parentMonth] pins the child
 // month directly for one-off batches whose routing differs from the registry.
-function deriveChildDemand(parentProduct, parentSchedRows, childProduct) {
+function deriveChildDemand(parentProduct, parentSchedRows, childProduct, pegOut) {
   const demandByChildMonth = {};
   const ovMap = (typeof allocationOverrides === 'object' && allocationOverrides[parentProduct]) || {};
   for (const pr of parentSchedRows) {
@@ -1998,6 +2010,20 @@ function deriveChildDemand(parentProduct, parentSchedRows, childProduct) {
     const factor = _lookupDepFactor(parentProduct, childProduct, pr.month, sup);
     const childUnits = startQty * factor;
     demandByChildMonth[childMonth] = (demandByChildMonth[childMonth] || 0) + childUnits;
+    // Optional pegging: record which parent order at which start month
+    // contributed how much, so the Supply Plan ledger can show *what's driving*
+    // a dependent-demand line (e.g. "43 kg DS demand ← 105,000 of 200mg DP").
+    if (pegOut) {
+      (pegOut[childMonth] = pegOut[childMonth] || []).push({
+        parent:       parentProduct,
+        parentMonth:  pr.month,
+        parentUnits:  startQty,
+        childUnits,
+        supplier:     sup || '',
+        factor,
+        allocLT,
+      });
+    }
   }
   return demandByChildMonth;
 }
@@ -3883,12 +3909,15 @@ function runScenario() {
 
     // Tier 2 — DP from LP (188mg LP + 188mg LP-EU Stock both feed 200mg DP;
     // 47mg LP + 47mg LP-EU Stock both feed 50mg DP)
-    function _aggregateDemand(parentProds, childProd) {
-      // Sum derived demand maps from multiple parents into one map for child
+    cascade.demandPegByProduct = {};
+    function _aggregateDemand(parentProds, childProd, pegOut) {
+      // Sum derived demand maps from multiple parents into one map for child;
+      // pegOut (optional) accumulates per-parent contributions keyed by child
+      // month for downstream "what drives this demand" drilldown.
       const combined = {};
       for (const pp of parentProds) {
         const parentSched = cascade.byProduct[pp] || [];
-        const partial = deriveChildDemand(pp, parentSched, childProd);
+        const partial = deriveChildDemand(pp, parentSched, childProd, pegOut);
         for (const [mo, qty] of Object.entries(partial)) {
           combined[mo] = (combined[mo] || 0) + qty;
         }
@@ -3898,10 +3927,12 @@ function runScenario() {
     function _runTier(childProd, parentProds) {
       const childBase = getBaseRows(childProd);
       if (!childBase.length) return;
-      const derivedDem = _aggregateDemand(parentProds, childProd);
+      const pegOut     = {};
+      const derivedDem = _aggregateDemand(parentProds, childProd, pegOut);
       const childRows  = applyDerivedDemand(childBase, derivedDem);
       const childMeta  = getMeta(childProd);
-      cascade.demandByProduct[childProd] = derivedDem;
+      cascade.demandByProduct[childProd]    = derivedDem;
+      cascade.demandPegByProduct[childProd] = pegOut;
       cascade.byProduct[childProd] = runMRP(childRows, 100, childMeta, childBase.length, childProd);
     }
 
@@ -4556,17 +4587,18 @@ function renderSupplyPlanTab(product, scenRows, meta) {
   const body = document.getElementById('tbl-supplyplan-body');
   if (!head || !body) return;
 
-  const unit   = (meta && meta.unit) || 'units';
-  const _q     = (meta && meta.unit === 'kg') ? 1 : 0;
-  const fmtU   = n => Number(n).toLocaleString('en-US', { minimumFractionDigits: _q, maximumFractionDigits: _q });
-  const tgtMOH = (meta && meta.target_moh) || 0;
+  const unit    = (meta && meta.unit) || 'units';
+  const _q      = (meta && meta.unit === 'kg') ? 1 : 0;
+  const fmtU    = n => Number(n).toLocaleString('en-US', { minimumFractionDigits: _q, maximumFractionDigits: _q });
+  const fmtI    = n => Number(n).toLocaleString('en-US');
+  const tgtMOH  = (meta && meta.target_moh) || 0;
   const critMOH = (meta && meta.critical_moh) || 0;
 
   const titleEl = document.getElementById('title-supplyplan');
   if (titleEl) titleEl.textContent = product ? `Supply Plan — Pegged Requirements — ${product}` : 'Supply Plan — Pegged Requirements';
 
   head.innerHTML = `<tr>
-    <th>Due Date</th><th>Category</th><th>Details</th><th>Supplier</th><th>Start Date</th>
+    <th>Due Date</th><th>Category</th><th>Order / Batches</th><th>Supplier</th><th>Start Date</th>
     <th style="text-align:right;">Reqt (${unit})</th>
     <th style="text-align:right;">Safety Stk</th>
     <th style="text-align:right;">Proj. Inventory</th>
@@ -4577,6 +4609,24 @@ function renderSupplyPlanTab(product, scenRows, meta) {
     const k = document.getElementById('supplyplan-kpi'); if (k) k.textContent = '';
     return;
   }
+
+  // ── Editing context ─────────────────────────────────────────────────────
+  // Inline edit controls reuse setProdOverride / adjProdOverride / setRowSupplier
+  // / resetProdOverride — the same pipeline as the Production Schedule Override
+  // table — so every edit triggers runScenario and the ledger refreshes live.
+  const safeQ         = s => String(s).replace(/'/g, "\\'");
+  const prodInput     = (typeof PROD_INPUTS !== 'undefined') ? PROD_INPUTS.find(p => p.product === product) : null;
+  const bindingThrough= prodInput ? prodInput.binding_through : null;
+  const supplierNames = (typeof _srRowsFor === 'function')
+    ? Array.from(new Set((_srRowsFor(product) || []).map(s => s.supplier).filter(Boolean)))
+    : [];
+  const ovMap         = (typeof prodOverrides === 'object' && prodOverrides[product]) || {};
+  // Per-tier dependent-demand pegs (DP/DS/RM spotlights) — the cascade records
+  // which parent orders generate each child-demand month, so a "Driven by"
+  // section can show where, e.g., 43 kg of DS demand actually comes from.
+  const driverMap = (typeof window !== 'undefined' && window.__cascade
+                     && window.__cascade.demandPegByProduct
+                     && window.__cascade.demandPegByProduct[product]) || null;
 
   // Avg future demand (next 12 mo) per month — drives Safety Stk + MoS.
   const n = scenRows.length;
@@ -4601,25 +4651,36 @@ function renderSupplyPlanTab(product, scenRows, meta) {
       const due = (typeof _monthPlus === 'function') ? _monthPlus(r.month, lt) : r.month;
       const bs  = r.batchSize || (meta && meta.batch_size) || 1;
       const batches = bs > 0 ? Math.round(rel / bs) : 0;
-      const firm = (r.committed || 0) > 0;
+      const isCommitted = (r.committed || 0) > 0;
+      const hasOv = ovMap[r.month] !== undefined;
       events.push({
         date: due, sort: 1,
-        cat: firm ? 'Firm / Committed' : 'Planned Order',
-        details: `WO-${r.month.slice(0, 7).replace('-', '')}` + (batches >= 1 ? ` · ${batches} batch${batches === 1 ? '' : 'es'}` : ''),
+        cat: isCommitted ? 'Firm / Committed' : 'Planned Order',
+        wo: `WO-${r.month.slice(0, 7).replace('-', '')}`,
+        batches, bs,
         supplier: r.supplier || (meta && meta.supplier) || '—',
         start: r.month, reqt: rel,
+        _order: true, _committed: isCommitted, _hasOverride: hasOv, _mrp: !isCommitted && !hasOv,
+      });
+    } else if (r.cancelled) {
+      // Surface cancelled overrides so the planner can reset them right here
+      // — otherwise the cancelled batch disappears from this ledger entirely.
+      const bs = r.batchSize || (meta && meta.batch_size) || 1;
+      events.push({
+        date: r.month, sort: 1.5,
+        cat: 'Cancelled',
+        wo: `WO-${r.month.slice(0, 7).replace('-', '')}`,
+        batches: 0, bs,
+        supplier: r.supplier || (meta && meta.supplier) || '—',
+        start: r.month, reqt: 0,
+        _order: true, _cancelled: true, _hasOverride: true,
       });
     }
   });
   // Date asc; within a date supply (sort 1) lands before demand (sort 2).
   events.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.sort - b.sort));
 
-  // ── FIFO pegging: allocate each supply to the demand it satisfies ───────
-  // Walk demand in date order; draw from the earliest-available supply whose
-  // delivery date <= the demand's date. Record the link on both sides, so an
-  // order knows which demand months it covers and a demand knows its sources.
-  // Supply left over = carried as ending inventory; demand left over =
-  // uncovered shortfall (no supply available in time).
+  // ── FIFO pegging (supply ↔ demand for this product) ─────────────────────
   const supplies = [];
   const demands  = [];
   events.forEach((e, idx) => {
@@ -4630,8 +4691,7 @@ function renderSupplyPlanTab(product, scenRows, meta) {
     else                         { e._rem = 0; }
   });
   const byDate = (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.sort - b.sort);
-  supplies.sort(byDate);
-  demands.sort(byDate);
+  supplies.sort(byDate); demands.sort(byDate);
   demands.forEach(d => {
     for (const s of supplies) {
       if (d._rem <= 0.0001) break;
@@ -4639,7 +4699,7 @@ function renderSupplyPlanTab(product, scenRows, meta) {
       const take = Math.min(s._rem, d._rem);
       s._rem -= take; d._rem -= take;
       s._pegs.push({ date: d.date, units: take });
-      d._pegs.push({ date: s.date, units: take, cat: s.cat, details: s.details, supplier: s.supplier });
+      d._pegs.push({ date: s.date, units: take, cat: s.cat, wo: s.wo, supplier: s.supplier });
     }
   });
 
@@ -4648,17 +4708,32 @@ function renderSupplyPlanTab(product, scenRows, meta) {
     'Demand':           'background:#fee2e2;color:#991b1b;',
     'Firm / Committed': 'background:#fff3cd;color:#92400e;',
     'Planned Order':    'background:#dbeafe;color:#1e40af;',
+    'Cancelled':        'background:#fecaca;color:#7f1d1d;text-decoration:line-through;',
   };
 
-  // Build the inline peg-detail panel HTML for one event.
+  // ── Inline peg-detail panel HTML for one event ──────────────────────────
   const pegDetail = e => {
     if (e.cat === 'Demand') {
+      // "Driven by" — for dependent-demand products (DP/DS/RM): show which
+      // parent orders generated this demand line. Independent (LP) demand has
+      // no driver chain, so this section only appears when the cascade peg
+      // map has entries for this month.
+      let driven = '';
+      if (driverMap && driverMap[e.date] && driverMap[e.date].length) {
+        const lines = driverMap[e.date].map(d => {
+          const factorTxt = d.factor ? `<span style="color:var(--muted);font-size:10px;"> × ${d.factor < 0.01 ? d.factor.toExponential(2) : d.factor.toFixed(3)}</span>` : '';
+          const allocTxt  = d.allocLT ? `<span style="color:var(--muted);font-size:10px;"> (− ${d.allocLT} mo alloc)</span>` : '';
+          const supTxt    = d.supplier ? ` · ${d.supplier}` : '';
+          return `<div style="padding:1px 0;">• <b>${fmtU(d.childUnits)}</b> from <b>${fmtI(d.parentUnits)}</b> units of <b>${d.parent}</b> starting ${monthLabel(d.parentMonth)}${supTxt}${factorTxt}${allocTxt}</div>`;
+        }).join('');
+        driven = `<div style="font-weight:700;color:var(--navy);margin-bottom:3px;">Driven by</div>${lines}<div style="height:8px;"></div>`;
+      }
       let lines = e._pegs.map(p =>
-        `<div style="padding:1px 0;">• <b>${fmtU(p.units)}</b> from ${monthLabel(p.date)} ${p.cat === 'Opening Stock' ? 'opening stock' : `delivery — ${p.details}${p.supplier ? ` · ${p.supplier}` : ''}`}</div>`
+        `<div style="padding:1px 0;">• <b>${fmtU(p.units)}</b> from ${monthLabel(p.date)} ${p.cat === 'Opening Stock' ? 'opening stock' : `delivery — ${p.wo || ''}${p.supplier ? ` · ${p.supplier}` : ''}`}</div>`
       ).join('');
       if (e._rem > 0.5) lines += `<div style="padding:1px 0;color:#dc2626;font-weight:600;">• <b>${fmtU(e._rem)}</b> uncovered (shortfall — no supply available in time)</div>`;
       if (!lines) lines = `<div style="color:var(--muted);">No supply pegged.</div>`;
-      return `<div style="padding:7px 12px 7px 30px;font-size:11px;"><div style="font-weight:700;color:var(--navy);margin-bottom:3px;">Covered by</div>${lines}</div>`;
+      return `<div style="padding:7px 12px 7px 30px;font-size:11px;">${driven}<div style="font-weight:700;color:var(--navy);margin-bottom:3px;">Covered by</div>${lines}</div>`;
     }
     let lines = e._pegs.map(p =>
       `<div style="padding:1px 0;">• <b>${fmtU(p.units)}</b> → ${monthLabel(p.date)} demand</div>`
@@ -4669,6 +4744,48 @@ function renderSupplyPlanTab(product, scenRows, meta) {
     return `<div style="padding:7px 12px 7px 30px;font-size:11px;"><div style="font-weight:700;color:var(--navy);margin-bottom:3px;">${hdr}</div>${lines}</div>`;
   };
 
+  // ── Per-order inline editor cells (Details + Supplier + Start Date) ─────
+  // Wrapped in stopPropagation so clicking a control doesn't toggle the row's
+  // peg-detail expander. For MRP-only rows we pass the current batch count as
+  // the seed so the first +/− creates an override starting from "what MRP
+  // recommended" rather than from the (zero) committed base.
+  const editorCells = e => {
+    const seedArg = e._mrp ? `,${e.batches}` : '';
+    const stop    = 'event.stopPropagation();';
+    const decBtn  = `<button onclick="${stop}adjProdOverride('${safeQ(product)}','${e.start}',${e.bs},-1${seedArg})"
+                      style="width:22px;height:22px;border:1px solid var(--border);border-radius:4px;background:var(--card);cursor:pointer;font-size:13px;line-height:1;color:var(--text);">−</button>`;
+    const incBtn  = `<button onclick="${stop}adjProdOverride('${safeQ(product)}','${e.start}',${e.bs},1${seedArg})"
+                      style="width:22px;height:22px;border:1px solid var(--border);border-radius:4px;background:var(--card);cursor:pointer;font-size:13px;line-height:1;color:var(--text);">+</button>`;
+    const numIn   = `<input type="number" min="0" step="1" value="${e.batches}"
+                      onclick="${stop}" onchange="${stop}setProdOverride('${safeQ(product)}','${e.start}',Math.max(0,parseInt(this.value)||0))"
+                      style="width:48px;text-align:center;padding:2px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--card);color:var(--text);">`;
+    const resetBtn = e._hasOverride
+      ? `<button onclick="${stop}resetProdOverride('${safeQ(product)}','${e.start}')" title="Clear override — restore base / MRP value"
+          style="background:transparent;border:1px solid var(--border);border-radius:4px;font-size:10px;padding:2px 6px;cursor:pointer;color:var(--muted);margin-left:6px;">↺</button>`
+      : '';
+    const woLabel = `<span style="font-size:10px;color:var(--muted);margin-right:6px;">${e.wo}</span>`;
+    const batchTxt = e._cancelled ? '<span style="color:#dc2626;font-weight:600;">cancelled</span>'
+                                  : `${e.batches >= 1 ? `${e.batches} batch${e.batches === 1 ? '' : 'es'}` : '—'}`;
+    const detailsCell = `<td style="white-space:nowrap;">
+      ${woLabel}<span style="display:inline-flex;align-items:center;gap:4px;vertical-align:middle;">${decBtn}${numIn}${incBtn}</span>
+      <span style="font-size:10px;color:var(--muted);margin-left:6px;">${batchTxt}</span>
+      ${resetBtn}
+    </td>`;
+    // Supplier dropdown — every supplier registered for this product so the
+    // user can route a single batch off the registry's primary pick.
+    const supOptions = supplierNames.length
+      ? supplierNames.map(nm => `<option value="${nm}" ${nm === e.supplier ? 'selected' : ''}>${nm}</option>`).join('')
+      : `<option value="${e.supplier}" selected>${e.supplier}</option>`;
+    const supCell = `<td><select onclick="${stop}" onchange="${stop}setRowSupplier('${safeQ(product)}','${e.start}', this.value)"
+        style="font-size:11px;padding:1px 3px;border-radius:3px;border:1px solid var(--border);background:var(--card);color:var(--text);">${supOptions}</select></td>`;
+    const isBinding = bindingThrough && e.start < bindingThrough;
+    const bindBadge = isBinding
+      ? `<span style="font-size:9px;font-weight:700;background:#FFA300;color:#003B5C;padding:1px 5px;border-radius:6px;margin-left:6px;" title="Within the binding production window — overrides are locked by the planner upstream.">BINDING</span>`
+      : '';
+    const startCell = `<td style="white-space:nowrap;">${monthLabel(e.start)}${bindBadge}</td>`;
+    return { detailsCell, supCell, startCell };
+  };
+
   let avail = 0;
   body.innerHTML = events.map(e => {
     avail += e.reqt;
@@ -4676,17 +4793,26 @@ function renderSupplyPlanTab(product, scenRows, meta) {
     const af      = avgAtMonth(e.date);
     const safety  = tgtMOH * af;
     const mos     = af > 0 ? dispInv / af : (dispInv > 0 ? Infinity : 0);
-    const reqtCol = e.cat === 'Demand' ? '#dc2626' : (e.reqt > 0 ? '#1a7a40' : 'var(--muted)');
+    const reqtCol = e.cat === 'Demand' ? '#dc2626' : (e._cancelled ? '#dc2626' : (e.reqt > 0 ? '#1a7a40' : 'var(--muted)'));
+    const reqtTxt = e._cancelled ? '<s>0</s>' : `${e.reqt > 0 ? '+' : ''}${fmtU(e.reqt)}`;
     const pill    = catPill[e.cat] || 'background:#e5e7eb;color:#374151;';
     const mosStyle = (critMOH && mos < critMOH) ? 'color:#dc2626;font-weight:700;' : '';
     const i = e._idx;
-    const main = `<tr onclick="toggleSupplyPeg(${i})" style="cursor:pointer;" title="Click to see pegging detail">
-      <td style="white-space:nowrap;"><span id="sp-c-${i}" style="display:inline-block;width:11px;color:var(--muted);">▸</span>${monthLabel(e.date)}</td>
+    let detailsCell, supCell, startCell;
+    if (e._order) {
+      ({ detailsCell, supCell, startCell } = editorCells(e));
+    } else {
+      detailsCell = `<td style="white-space:nowrap;">${e.details || ''}</td>`;
+      supCell     = `<td style="white-space:nowrap;">${e.supplier || ''}</td>`;
+      startCell   = `<td style="white-space:nowrap;">${e.start ? monthLabel(e.start) : '—'}</td>`;
+    }
+    const main = `<tr>
+      <td style="white-space:nowrap;cursor:pointer;" onclick="toggleSupplyPeg(${i})" title="Click to see pegging detail"><span id="sp-c-${i}" style="display:inline-block;width:11px;color:var(--muted);">▸</span>${monthLabel(e.date)}</td>
       <td><span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;${pill}">${e.cat}</span></td>
-      <td style="white-space:nowrap;">${e.details}</td>
-      <td style="white-space:nowrap;">${e.supplier || ''}</td>
-      <td style="white-space:nowrap;">${e.start ? monthLabel(e.start) : '—'}</td>
-      <td style="text-align:right;color:${reqtCol};font-weight:600;white-space:nowrap;">${e.reqt > 0 ? '+' : ''}${fmtU(e.reqt)}</td>
+      ${detailsCell}
+      ${supCell}
+      ${startCell}
+      <td style="text-align:right;color:${reqtCol};font-weight:600;white-space:nowrap;">${reqtTxt}</td>
       <td style="text-align:right;color:var(--muted);white-space:nowrap;">${fmtU(safety)}</td>
       <td style="text-align:right;font-weight:600;white-space:nowrap;">${fmtU(dispInv)}</td>
       <td style="text-align:right;white-space:nowrap;${mosStyle}">${mos === Infinity ? '∞' : mos.toFixed(1)}</td>
@@ -4695,12 +4821,15 @@ function renderSupplyPlanTab(product, scenRows, meta) {
     return main + det;
   }).join('');
 
-  const orders = events.filter(e => e.cat === 'Firm / Committed' || e.cat === 'Planned Order');
+  const orders    = events.filter(e => e._order && !e._cancelled);
+  const cancelled = events.filter(e => e._cancelled);
   const shortfall = demands.reduce((a, d) => a + Math.max(d._rem, 0), 0);
   const kpi = document.getElementById('supplyplan-kpi');
   if (kpi) {
     const span = events.length ? `${monthLabel(events[0].date)} – ${monthLabel(events[events.length - 1].date)}` : '';
-    kpi.innerHTML = `${orders.length} order${orders.length === 1 ? '' : 's'} · ${span}` +
+    kpi.innerHTML = `${orders.length} order${orders.length === 1 ? '' : 's'}` +
+      (cancelled.length ? ` · <span style="color:#dc2626;">${cancelled.length} cancelled</span>` : '') +
+      ` · ${span}` +
       (shortfall > 0.5 ? ` · <span style="color:#dc2626;font-weight:700;">${fmtU(shortfall)} ${unit} uncovered</span>` : '');
   }
 }
@@ -4713,6 +4842,41 @@ function toggleSupplyPeg(i) {
   const open = d.style.display !== 'none';
   d.style.display = open ? 'none' : '';
   if (c) c.textContent = open ? '▸' : '▾';
+}
+
+// "+ Add planned order" inline form on the Supply Plan toolbar. Stacks on top
+// of any existing committed/override for the chosen month — same convention
+// as the Production Schedule Override card's "+ Add batch" form.
+function toggleSupplyPlanAddForm() {
+  const f = document.getElementById('sp-add-form');
+  if (!f) return;
+  const opening = f.style.display === 'none' || !f.style.display;
+  f.style.display = opening ? 'inline-flex' : 'none';
+  if (opening) {
+    const m = document.getElementById('sp-add-month');
+    if (m && !m.value) m.value = new Date().toISOString().slice(0, 7);
+  }
+}
+function supplyPlanAddOrder() {
+  const product = document.getElementById('sel-product')?.value;
+  if (!product) { alert('Pick a spotlight product first.'); return; }
+  const monthVal = document.getElementById('sp-add-month')?.value;
+  if (!monthVal) { alert('Pick a month.'); return; }
+  const batches = parseInt(document.getElementById('sp-add-batches')?.value, 10);
+  if (!batches || batches < 1) { alert('Enter 1 or more batches.'); return; }
+  const month  = monthVal + '-01';
+  const regSup = (typeof getActiveSupplier === 'function') ? getActiveSupplier(product, month) : null;
+  const meta   = getMeta(product);
+  const bs     = (regSup && regSup.batch_size) || (meta && meta.batch_size) || 1;
+  const baseRow = (typeof PROD_DATA !== 'undefined')
+    ? PROD_DATA.find(r => r.product === product && r.month === month) : null;
+  const baseBatches = baseRow ? Math.round((baseRow.prod || 0) / bs) : 0;
+  const existingOv  = (prodOverrides[product] || {})[month];
+  const currentBatches = (typeof existingOv === 'number') ? existingOv
+    : (existingOv && typeof existingOv.batches === 'number') ? existingOv.batches
+    : baseBatches;
+  setProdOverride(product, month, currentBatches + batches);
+  if (typeof toast === 'function') toast(`+${batches} batch${batches === 1 ? '' : 'es'} scheduled for ${monthLabel(month)}`);
 }
 
 function updateProductionTab(product, baseRows, scenRows, meta) {
